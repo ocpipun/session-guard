@@ -1,0 +1,12 @@
+{
+  "name": "session-guard",
+  "description": "Measures context size and breaks, enforces hand-off thresholds (normal and long mode), and locks finished sessions so later prompts never reach Claude.",
+  "version": "1.0.0",
+  "author": {
+    "name": "ocpipun"
+  },
+  "homepage": "https://github.com/ocpipun/session-guard",
+  "repository": "https://github.com/ocpipun/session-guard",
+  "license": "MIT",
+  "keywords": ["context", "hand-off", "session", "tokens", "hooks"]
+}

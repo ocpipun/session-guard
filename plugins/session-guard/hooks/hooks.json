@@ -1,0 +1,39 @@
+{
+  "description": "Session Guard: measures context and breaks, enforces hand-off thresholds, locks finished sessions.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; else python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; else python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; else python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

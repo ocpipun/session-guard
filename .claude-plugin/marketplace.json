@@ -1,0 +1,14 @@
+{
+  "name": "session-guard",
+  "description": "Session Guard: context and break measurement, hand-off thresholds and session locking for Claude Code.",
+  "owner": {
+    "name": "ocpipun"
+  },
+  "plugins": [
+    {
+      "name": "session-guard",
+      "source": "./plugins/session-guard",
+      "description": "Measures context size and breaks, enforces hand-off thresholds, and locks finished sessions."
+    }
+  ]
+}
