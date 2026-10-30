@@ -163,7 +163,7 @@ def state_path(sid):
 def load_state(sid, ids):
     try:
         with open(state_path(sid), encoding="utf-8") as fh:
-            return json.load(fh)
+            return fix_state(json.load(fh))
     except (OSError, ValueError):
         pass
     # Reopened conversation under a new id: inherit the state that shares message ids.
@@ -176,8 +176,17 @@ def load_state(sid, ids):
             except (OSError, ValueError):
                 continue
             if known & set(old.get("ids") or []):
-                return old
-    return {"long": False, "locked": False, "notified": [], "ids": []}
+                return fix_state(old)
+    return fix_state({})
+
+
+def fix_state(state):
+    """Fills missing keys, so a damaged or older state file never silences the guard."""
+    if not isinstance(state, dict):
+        state = {}
+    for key, value in (("long", False), ("locked", False), ("notified", []), ("ids", [])):
+        state.setdefault(key, value)
+    return state
 
 
 def save_state(sid, state, ids):
