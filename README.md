@@ -102,7 +102,7 @@ Cloud sessions do not install plugins. Session Guard is installed into each repo
 Install Session Guard: git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard, then follow /tmp/session-guard/CLOUD.md
 ```
 
-Claude downloads Session Guard, shows the repository's rules that conflict with it and asks for your approval (if you decline, nothing is installed), installs it into the repository's `.claude/` folder and asks before committing. From the next cloud session of that repository on, Session Guard runs there. The cloud has no global CLAUDE.md, so the repository copy brings the general rules itself; a repository without CLAUDE.md gets the project files. On a computer where the plugin is installed, the repository copy stays quiet, so the guard never runs twice.
+Claude downloads Session Guard, shows the repository's rules that conflict with it and asks for your approval (if you decline, nothing is installed), installs it into the repository's `.claude/` folder and, on your yes, commits it straight to the repository's main branch. **Once per repository is enough:** every new cloud session and conversation of that repository runs Session Guard from the start (not the session you installed it in, because hooks are read at session start). The cloud has no global CLAUDE.md, so the repository copy brings the general rules itself; a repository without CLAUDE.md gets the project files. On a computer where the plugin is installed, the repository copy stays quiet, so the guard never runs twice.
 
 ## Uninstall
 

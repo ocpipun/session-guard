@@ -102,7 +102,7 @@ Bulut oturumları plugin kurmaz. Session Guard her depoya bir kez, o deponun bir
 Install Session Guard: git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard, then follow /tmp/session-guard/CLOUD.md
 ```
 
-Claude Session Guard'ı indirir, deponun onunla çakışan kurallarını gösterip onayınızı ister (reddederseniz hiçbir şey kurulmaz), deponun `.claude/` klasörüne kurar ve commit'ten önce sorar. O deponun bir sonraki bulut oturumundan itibaren Session Guard orada çalışır. Bulutta genel CLAUDE.md yoktur; genel kuralları depodaki kopya kendisi getirir; CLAUDE.md'si olmayan depoya proje dosyaları oluşturulur. Plugin'in kurulu olduğu bilgisayarda depodaki kopya sessiz kalır; Session Guard iki kez çalışmaz.
+Claude Session Guard'ı indirir, deponun onunla çakışan kurallarını gösterip onayınızı ister (reddederseniz hiçbir şey kurulmaz), deponun `.claude/` klasörüne kurar ve onayınızla doğrudan deponun ana dalına (main) kaydeder. **Her depo için bir kez yeterlidir:** o deponun bütün yeni bulut oturumları ve sohbetleri Session Guard'la başlar (kurulumu yaptığınız oturum hariç, çünkü hook'lar oturum başında okunur). Bulutta genel CLAUDE.md yoktur; genel kuralları depodaki kopya kendisi getirir; CLAUDE.md'si olmayan depoya proje dosyaları oluşturulur. Plugin'in kurulu olduğu bilgisayarda depodaki kopya sessiz kalır; Session Guard iki kez çalışmaz.
 
 ## Kaldırma
 
