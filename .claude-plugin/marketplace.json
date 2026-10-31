@@ -8,7 +8,7 @@
     {
       "name": "session-guard",
       "source": "./plugins/session-guard",
-      "description": "Measures context size and breaks, enforces hand-off thresholds, and locks finished sessions."
+      "description": "Measures context size and breaks, enforces hand-off thresholds, locks finished sessions, creates project files and removes conflicting rules with your approval."
     }
   ]
 }

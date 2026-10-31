@@ -14,8 +14,8 @@ The rules themselves are given at session start by the plugin.
 2. Remove finished items and needless detail. If a line will matter later (decision, measurement, proven cause,
    how to undo something), move it as one dated line to `docs/STATUS_ARCHIVE.md` under the matching heading;
    otherwise delete it. Do not read the whole archive; find the heading by search.
-3. Write a "## Hand-off note" section in `docs/STATUS.md` (update it if present; never a second one), in the
-   user's language:
+3. Write a "## Hand-off note" section in `docs/STATUS.md` (update it if present, also when its heading is in the
+   user's language; never a second one), in the user's language:
    - Date, and context from the Session Guard line
    - Current goal
    - Done: one line

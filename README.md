@@ -36,7 +36,10 @@ Session Guard fixes all three with measurements instead of guesses.
 - **A locked session never passes a prompt to Claude.** The prompt is blocked before it is sent, so it costs nothing and changes nothing. You see "Session closed, open a new session".
 - **Reopened conversations stay locked.** The desktop app can reopen an old conversation under a new session id. Session Guard recognises it by its message ids, so the lock (and long mode) survive.
 - **Session start:** Claude gets the rules and your `docs/STATUS.md` automatically. You never type "read STATUS.md" again; the archive (`docs/STATUS_ARCHIVE.md`) is only searched when needed.
-- **Reply style that saves tokens:** plain words, short sentences, each issue numbered, with only the labels it needs: PROBLEM / RECOMMENDATION / ASSUMPTION / WARNING / UNVERIFIED (in your language). Claude never presents a guess as fact. If you want more detail, ask.
+- **Reply style that saves tokens:** plain words, short sentences, each issue numbered, with only the labels it needs: PROBLEM / RECOMMENDATION / ASSUMPTION / WARNING / UNVERIFIED (in your language). If you want more detail, ask.
+- **Facts stay facts.** Claude never presents something it has not researched or is not sure of as fact (it is labelled UNVERIFIED), and marks its own recommendations and assumptions as its own.
+- **Project files.** In every new project the first session creates `CLAUDE.md`, `docs/STATUS.md` and `docs/STATUS_ARCHIVE.md`. Files that already exist (in any letter case, or `.claude/CLAUDE.md`) are never recreated or overwritten. Nothing is created in your home folder, a drive root or system folders, and a git worktree uses its main checkout's files.
+- **One rule set.** Session Guard's general rules live in a marked block of your global `~/.claude/CLAUDE.md`. Rules, skills, scripts and hooks that conflict with them are removed during the one-time setup, with your approval (see below).
 - **Any language.** Commands and the plugin's own texts are English; Claude talks to you in your language.
 
 ## Commands
@@ -60,8 +63,8 @@ Session Guard is a Claude Code **plugin**: a package of hooks, a script and skil
   - shows you a short message when a threshold is first passed,
   - blocks prompts in a locked session,
   - stops Claude's turn if a hard limit is reached in the middle of work.
-- **Skills** hold the procedures (hand-off, break hand-off, finish session, cloud setup). Claude loads them only when needed.
-- **State** (long mode, lock, notified thresholds) is a small JSON file per session in `~/.claude/session_guard/`. Files older than 30 days are deleted.
+- **Skills** hold the procedures (setup and project review, hand-off, break hand-off, finish session, cloud setup). Claude loads them only when needed.
+- **State** is Session Guard's own small record per session in `~/.claude/session_guard/`: is long mode on, is the session locked, which thresholds were already announced. It is not your work: no project file, conversation or Claude data is ever in it. Records unused for 30 days are deleted so the hook stays fast; a locked session's record is never deleted, so an old session stays locked even when reopened months later. The setup approval is kept in `~/.claude/session_guard/config/setup.json`.
 
 Nothing is sent anywhere. The script only reads local files and writes its own state files.
 
@@ -80,15 +83,32 @@ Or inside Claude Code: `/plugin marketplace add ocpipun/session-guard`, then `/p
 
 Installed at user scope, it works in **every project on that machine**. Start a new session after installing. Nobody needs to copy this repository; updates come from here.
 
+## One-time setup (required)
+
+Session Guard does **nothing** until its setup is approved. In the first session after installing, Claude tells you and asks whether to run it (or type `/session-guard:setup`):
+
+1. It scans your global `~/.claude` (CLAUDE.md, memory files, skills, commands, agents, scripts, output styles, rules, hooks) and every project Claude Code has sessions for.
+2. It lists everything that conflicts with Session Guard: rules on context limits, hand-offs, breaks, ending sessions, STATUS files or reply style that say something different or repeat Session Guard, and skills, scripts or hooks that do the same job. Project facts and a project's own STATUS layout are not conflicts.
+3. You approve the list (you may say an item is not a conflict). The approved items are deleted for good (no backup copies, so nothing half-moved is left behind) and the general rules block is written into `~/.claude/CLAUDE.md` (created if missing; your other rules stay).
+4. **If you do not approve, Session Guard stays off.** Run `/session-guard:setup` again any time.
+
+A project opened later that already has its own CLAUDE.md, skills or hooks gets the same review once, for that project only; declining turns Session Guard off in that project only. A new project with nothing to review needs no review. When an update changes the rules, the setup runs again.
+
 ## Cloud sessions (claude.ai/code)
 
-Cloud sessions do not install plugins. They do run the hooks and skills that live **inside the repository**. So for each repository you use in the cloud, run once on your machine:
+Cloud sessions do not install plugins. They do run the hooks and skills that live **inside the repository**, so Session Guard is copied into each repository once. Two ways:
+
+**From the cloud session itself (no computer needed).** In a cloud session of the repository, type:
 
 ```
-/session-guard:cloud-setup
+Install Session Guard from https://github.com/ocpipun/session-guard into this repository, following its CLOUD.md.
 ```
 
-It copies the script, the hooks and the hand-off skill into the repository's `.claude/` folder. Commit and push; from then on cloud sessions of that repository are guarded too. On a machine where the plugin is installed, that project copy stays quiet, so the guard never runs twice.
+Claude downloads it from GitHub, reviews the repository's rules with you (same rules as the setup: nothing is removed without your yes, and if you decline nothing is installed), copies it into `.claude/` and asks before committing. The cloud environment's network access must allow github.com. Session Guard surely works from the next session of that repository on.
+
+**From your computer, where the plugin is installed:** run `/session-guard:cloud-setup` in the project.
+
+Either way the repository must pass the project review first. It copies the script, the hooks and the skills into the repository's `.claude/` folder and creates the missing `CLAUDE.md`, `docs/STATUS.md` and `docs/STATUS_ARCHIVE.md`. Commit and push; from then on cloud sessions of that repository are guarded too. There is no global CLAUDE.md in the cloud, so the project copy gives the general rules at session start. If a cloud session finds a repository without CLAUDE.md, it creates the project files; if it finds rules nobody reviewed, it asks for the review before Session Guard works there. On a machine where the plugin is installed, the project copy stays quiet, so the guard never runs twice.
 
 ## Uninstall
 
@@ -96,13 +116,15 @@ It copies the script, the hooks and the hand-off skill into the repository's `.c
 claude plugin uninstall session-guard@session-guard
 ```
 
-Or just ask Claude to uninstall it. For a repository set up for the cloud, ask Claude to remove `.claude/session-guard/`, `.claude/skills/session-guard/` and the Session Guard hooks from `.claude/settings.json`.
+Or just ask Claude to uninstall it. Then remove the block between `<!-- session-guard:begin` and `<!-- session-guard:end -->` from `~/.claude/CLAUDE.md`. For a repository set up for the cloud, ask Claude to remove `.claude/session-guard/`, `.claude/skills/session-guard/`, `.claude/skills/session-guard-setup/` and the Session Guard hooks from `.claude/settings.json`.
 
 ## Limits and honest notes
 
 - The context number is the size of the *last reply*, so it can lag one step behind. Thresholds are checked again after every tool call while Claude works.
-- A background job whose "finished" notice never arrives counts as running for at most 24 hours.
+- A background job or subagent whose "finished" notice never arrives counts as running for at most 24 hours. After that, and when Claude has worked on one message for over 24 hours, Session Guard tells you it may be a bug and suggests `finish session` if it is stuck. A 24-hour timer starts with every prompt (a background hook; the newest prompt replaces the older timer within an hour; the timer is a local check, not a Claude request, so it uses no quota). If 24 hours pass with no new prompt and the session is still busy, it wakes Claude, which tells you. A finished reply waiting for you is not counted. In the cloud the timer dies if the cloud stops an inactive session first.
 - Cloud use is based on the official documentation (repository hooks and skills run in single-repository cloud sessions; Python 3 is preinstalled). It has not yet been tested in a live cloud session.
+- "Every project" means every project Claude Code has a session for (found from `~/.claude/projects`). Folders never opened in Claude Code are not scanned; they are reviewed when first opened.
+- Whether an item conflicts is decided by Claude and approved by you; the script only finds the candidates.
 - Thresholds are fixed in the script (`NORMAL_STEPS`, `LONG_STEPS`). They are working values, not proven quota savings.
 
 ## Tests

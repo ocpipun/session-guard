@@ -36,7 +36,10 @@ Session Guard bu üçünü tahminle değil ölçümle çözer.
 - **Kilitli oturum hiçbir mesajı Claude'a iletmez.** Mesaj gönderilmeden engellenir; kota harcanmaz, hiçbir şey değişmez. Ekranda "Session closed, open a new session" görürsünüz.
 - **Yeniden açılan sohbet kilitli kalır.** Masaüstü uygulaması eski bir sohbeti yeni bir oturum kimliğiyle açabilir. Session Guard sohbeti mesaj kimliklerinden tanır; kilit (ve uzun mod) korunur.
 - **Oturum başı:** Claude kuralları ve `docs/STATUS.md` dosyanızı kendiliğinden alır. Artık "STATUS.md'yi oku" yazmanız gerekmez; arşiv (`docs/STATUS_ARCHIVE.md`) yalnız gerektiğinde aranır.
-- **Token tasarrufu sağlayan yazım biçimi:** sade dil, kısa cümle; her sorun numaralı, altında yalnız gereken etiketler: SORUN / ÖNERİ / VARSAYIM / UYARI / DOĞRULANMADI (sizin dilinizde). Claude tahmini kesin bilgi gibi sunmaz. Ayrıntı isterseniz sorarsınız.
+- **Token tasarrufu sağlayan yazım biçimi:** sade dil, kısa cümle; her sorun numaralı, altında yalnız gereken etiketler: SORUN / ÖNERİ / VARSAYIM / UYARI / DOĞRULANMADI (sizin dilinizde). Ayrıntı isterseniz sorarsınız.
+- **Bilgi bilgidir.** Claude araştırmadığı ya da emin olmadığı şeyi kesin bilgi gibi sunmaz (DOĞRULANMADI diye işaretler); önerilerini ve varsayımlarını kendi önerisi / varsayımı olarak belirtir.
+- **Proje dosyaları.** Her yeni projenin ilk oturumunda `CLAUDE.md`, `docs/STATUS.md` ve `docs/STATUS_ARCHIVE.md` oluşturulur. Var olan dosyalar (büyük/küçük harf farkı olsa da, ya da `.claude/CLAUDE.md`) asla yeniden oluşturulmaz, üzerine yazılmaz. Ana klasörünüzde, sürücü kökünde ve sistem klasörlerinde hiçbir şey oluşturulmaz; git worktree ana kopyanın dosyalarını kullanır.
+- **Tek kural seti.** Session Guard'ın genel kuralları genel `~/.claude/CLAUDE.md` dosyanızda işaretli bir blokta durur. Bunlarla çelişen kural, skill, betik ve hook'lar tek seferlik kurulumda sizin onayınızla silinir (aşağıda).
 - **Her dil.** Komutlar ve eklentinin kendi metinleri İngilizcedir; Claude sizinle sizin dilinizde konuşur.
 
 ## Komutlar
@@ -60,8 +63,8 @@ Session Guard bir Claude Code **plugin**'idir (eklenti): hook'lar, bir betik ve 
   - bir eşik ilk kez geçildiğinde size kısa bir mesaj gösterir,
   - kilitli oturumda mesajları engeller,
   - iş sırasında kesin sınıra gelinirse Claude'un turunu durdurur.
-- **Skill'ler** adımları tutar (devir, mola devri, oturum sonlandırma, bulut kurulumu). Claude onları yalnız gerektiğinde yükler.
-- **Durum** (uzun mod, kilit, bildirilen eşikler) oturum başına küçük bir JSON dosyasıdır: `~/.claude/session_guard/`. 30 günden eski dosyalar silinir.
+- **Skill'ler** adımları tutar (kurulum ve proje incelemesi, devir, mola devri, oturum sonlandırma, bulut kurulumu). Claude onları yalnız gerektiğinde yükler.
+- **Durum**, Session Guard'ın oturum başına tuttuğu küçük kendi kaydıdır (`~/.claude/session_guard/`): uzun mod açık mı, oturum kilitli mi, hangi eşik zaten bildirildi. Sizin işiniz değildir: içinde proje dosyası, sohbet ya da Claude verisi yoktur. 30 gün kullanılmayan kayıtlar, hook hızlı kalsın diye silinir; kilitli oturumun kaydı hiç silinmez, böylece eski bir oturum aylar sonra yeniden açılsa da kilitli kalır. Kurulum onayı `~/.claude/session_guard/config/setup.json`'da durur.
 
 Hiçbir veri bir yere gönderilmez. Betik yalnız yerel dosyaları okur ve kendi durum dosyalarını yazar.
 
@@ -80,15 +83,32 @@ Ya da Claude Code içinde: `/plugin marketplace add ocpipun/session-guard`, sonr
 
 Kullanıcı düzeyinde kurulunca o bilgisayardaki **bütün projelerde** çalışır. Kurulumdan sonra yeni oturum açın. Kimsenin bu depoyu kopyalaması gerekmez; güncellemeler buradan gelir.
 
+## Tek seferlik kurulum (zorunlu)
+
+Kurulum onaylanana kadar Session Guard **hiçbir şey yapmaz**. Yüklemeden sonraki ilk oturumda Claude bunu söyler ve kurulumu şimdi çalıştırıp çalıştırmayacağını sorar (ya da `/session-guard:setup` yazın):
+
+1. Genel `~/.claude` klasörünüzü (CLAUDE.md, hafıza dosyaları, skill, komut, ajan, betik, output style, rules, hook) ve Claude Code'da oturumu olan bütün projeleri tarar.
+2. Session Guard'la çakışan her şeyi listeler: bağlam sınırı, devir, mola, oturum bitirme, STATUS dosyaları ya da yazım biçimi üzerine farklı şey söyleyen veya Session Guard'ı tekrarlayan kurallar; aynı işi yapan skill, betik ve hook'lar. Proje bilgileri ve projenin kendi STATUS düzeni çakışma sayılmaz.
+3. Listeyi onaylarsınız (bir maddenin çakışma olmadığını söyleyebilirsiniz). Onaylanan maddeler kalıcı olarak silinir (yedek kopya yok; yarım taşınmış bir şey kalmaz) ve genel kurallar bloğu `~/.claude/CLAUDE.md`'ye yazılır (yoksa oluşturulur; diğer kurallarınız kalır).
+4. **Onaylamazsanız Session Guard kapalı kalır.** `/session-guard:setup` ile istediğiniz zaman yeniden çalıştırırsınız.
+
+Sonradan açılan ve kendi CLAUDE.md'si, skill'i ya da hook'u olan bir proje aynı incelemeden bir kez, yalnız o proje için geçer; reddederseniz Session Guard yalnız o projede kapanır. İncelenecek bir şeyi olmayan yeni proje incelemesiz başlar. Bir güncelleme kuralları değiştirirse kurulum yeniden çalışır.
+
 ## Bulut oturumları (claude.ai/code)
 
-Bulut oturumları plugin kurmaz. Ama **deponun içindeki** hook'ları ve skill'leri çalıştırır. Bu yüzden bulutta kullandığınız her depo için kendi bilgisayarınızda bir kez çalıştırın:
+Bulut oturumları plugin kurmaz. Ama **deponun içindeki** hook'ları ve skill'leri çalıştırır; bu yüzden Session Guard her depoya bir kez kopyalanır. İki yol var:
+
+**Bulut oturumunun kendisinden (bilgisayar gerekmez).** Deponun bir bulut oturumunda şunu yazın:
 
 ```
-/session-guard:cloud-setup
+Install Session Guard from https://github.com/ocpipun/session-guard into this repository, following its CLOUD.md.
 ```
 
-Betiği, hook'ları ve devir skill'ini deponun `.claude/` klasörüne kopyalar. Commit edip gönderin; o deponun bulut oturumları da korunur. Plugin'in kurulu olduğu bilgisayarda bu proje kopyası sessiz kalır; Session Guard iki kez çalışmaz.
+Claude GitHub'dan indirir, deponun kurallarını sizinle inceler (kurulumla aynı kurallar: onayınız olmadan hiçbir şey silinmez; reddederseniz hiçbir şey kurulmaz), `.claude/` klasörüne kopyalar ve commit'ten önce sorar. Bulut ortamının ağ erişimi github.com'a izin vermelidir. Session Guard o deponun bir sonraki oturumundan itibaren kesin çalışır.
+
+**Plugin'in kurulu olduğu bilgisayarınızdan:** projede `/session-guard:cloud-setup` çalıştırın.
+
+İki yolda da depo önce proje incelemesinden geçmelidir. Betiği, hook'ları ve skill'leri deponun `.claude/` klasörüne kopyalar; eksik `CLAUDE.md`, `docs/STATUS.md` ve `docs/STATUS_ARCHIVE.md` dosyalarını oluşturur. Commit edip gönderin; o deponun bulut oturumları da korunur. Bulutta genel CLAUDE.md yoktur; genel kuralları proje kopyası oturum başında verir. Bulut oturumu CLAUDE.md'si olmayan bir depo bulursa proje dosyalarını oluşturur; incelenmemiş kurallar bulursa Session Guard orada çalışmadan önce incelemeyi ister. Plugin'in kurulu olduğu bilgisayarda bu proje kopyası sessiz kalır; Session Guard iki kez çalışmaz.
 
 ## Kaldırma
 
@@ -96,13 +116,15 @@ Betiği, hook'ları ve devir skill'ini deponun `.claude/` klasörüne kopyalar. 
 claude plugin uninstall session-guard@session-guard
 ```
 
-Ya da Claude'a kaldırmasını söyleyin. Bulut için kurulmuş bir depoda Claude'dan `.claude/session-guard/`, `.claude/skills/session-guard/` klasörlerini ve `.claude/settings.json` içindeki Session Guard hook'larını silmesini isteyin.
+Ya da Claude'a kaldırmasını söyleyin. Sonra `~/.claude/CLAUDE.md` içindeki `<!-- session-guard:begin` ile `<!-- session-guard:end -->` arasındaki bloğu silin. Bulut için kurulmuş bir depoda Claude'dan `.claude/session-guard/`, `.claude/skills/session-guard/`, `.claude/skills/session-guard-setup/` klasörlerini ve `.claude/settings.json` içindeki Session Guard hook'larını silmesini isteyin.
 
 ## Sınırlar ve açık notlar
 
 - Bağlam sayısı *son yanıtın* büyüklüğüdür; bir adım geriden gelebilir. Claude çalışırken her araçtan sonra eşikler yeniden kontrol edilir.
-- "Bitti" haberi hiç gelmeyen bir arka plan işi en fazla 24 saat "sürüyor" sayılır.
+- "Bitti" haberi hiç gelmeyen bir arka plan işi ya da alt-ajan en fazla 24 saat "sürüyor" sayılır. Sonra, ve Claude tek bir mesaj üzerinde 24 saatten uzun çalışırsa, Session Guard size bunun bir hata olabileceğini söyler, takıldıysa `finish session` önerir. Her mesajla 24 saatlik bir zamanlayıcı başlar (arka plan hook'u; yeni mesaj bir saat içinde eskisinin yerini alır; zamanlayıcı yerel bir kontroldür, Claude'a istek göndermez, kota harcamaz). Yeni mesaj gelmeden 24 saat geçer ve oturum hâlâ meşgulse Claude'u uyandırır, Claude size söyler. Bitmiş ve sizi bekleyen bir yanıt sayılmaz. Bulutta, bulut boşta kalan oturumu daha önce kapatırsa zamanlayıcı da kapanır.
 - Bulut kullanımı resmi belgelere dayanır (tek depolu bulut oturumunda deponun hook ve skill'leri çalışır; Python 3 kurulu gelir). Henüz gerçek bir bulut oturumunda test edilmedi.
+- "Bütün projeler", Claude Code'da oturumu olan projelerdir (`~/.claude/projects`'ten bulunur). Claude Code'da hiç açılmamış klasörler taranmaz; ilk açıldıklarında incelenir.
+- Bir maddenin çakışıp çakışmadığına Claude karar verir, siz onaylarsınız; betik yalnız adayları bulur.
 - Eşikler betikte sabittir (`NORMAL_STEPS`, `LONG_STEPS`). Çalışma değerleridir; kanıtlanmış kota tasarrufu değildir.
 
 ## Testler
