@@ -108,8 +108,9 @@ STALE_USER = ("possible bug: something has been active for over 24 hours. Please
               "end the session with \"finish session\".")
 
 RULES = """[Session Guard] Rules for this session (plugin session-guard).
-- You cannot measure context size or time between messages. Session Guard reports them on every prompt
-  ("[Session Guard] Context: ...") and may add an instruction. Follow it. Quote its numbers; never invent one.
+- You cannot measure context size or time between messages. Session Guard measures them itself and writes to
+  you ("[Session Guard] Context: ...") only when it has an instruction. Follow it. Quote its numbers; never
+  invent one. Never add context size or mode to your replies on your own.
 - Session start: docs/STATUS.md (if any) is given below; do not read it again. Read docs/STATUS_ARCHIVE.md only
   when needed, and then only the matching part via search.
 - Normal mode: 250k notice; 300k hand-off, then no new tasks (only information questions and hand-off note
@@ -651,14 +652,16 @@ def on_prompt(inp):
 
     prompt = normalize(inp.get("prompt") or "")
     gap = time.time() - last if last else None
-    if has_command(LONG, prompt):
+    notes, user = [], []
+    if has_command(LONG, prompt) and not state.get("long"):
         state["long"] = True
+        notes.append("LONG MODE is on for this session (cannot be switched off). Confirm it to the user in one line.")
     long_mode = state.get("long")
     finish = has_command(FINISH, prompt)
+    # The status line goes out only together with an instruction: a plain prompt costs no tokens.
     line = "[Session Guard] Context: %s (last reply). Mode: %s. Since last reply: %s.%s" % (
         k(context), "LONG" if long_mode else "normal", "unknown" if gap is None else "%d min" % (gap // 60),
         " Background jobs still running: %d (break rule off)." % pending if pending else "")
-    notes, user = [], []
 
     limit = LONG_LIMIT if long_mode else NORMAL_LIMIT
     if context is not None and context >= limit and not finish:
@@ -700,6 +703,8 @@ def on_prompt(inp):
                 user.append(step[3])
 
     save_state(sid, state, ids)
+    if not notes:
+        return 0
     data = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "\n".join([line] + notes)}}
     if user:
         data["systemMessage"] = "Session Guard: " + " ".join(user)

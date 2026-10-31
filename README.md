@@ -59,7 +59,7 @@ Session Guard is a Claude Code **plugin**: a package of hooks, a script and skil
 
 - **Hooks** run the script automatically on three events: session start, every prompt you submit, and after every tool Claude uses.
 - **The script** (`scripts/session_guard.py`, Python, standard library only) reads the session transcript that Claude Code already keeps on your disk (`~/.claude/projects/...`). The context size is taken from the token usage of Claude's last reply; the break is the time since that reply. It then:
-  - adds a status line and, at a threshold, an instruction to Claude's context,
+  - at a threshold (or a break, long mode, finish session) adds an instruction with the measured numbers to Claude's context; a normal prompt gets nothing, so it costs no tokens,
   - shows you a short message when a threshold is first passed,
   - blocks prompts in a locked session,
   - stops Claude's turn if a hard limit is reached in the middle of work.

@@ -72,10 +72,12 @@ class Guard(unittest.TestCase):
         return (result.get("hookSpecificOutput") or {}).get("additionalContext", "")
 
     # --- thresholds -------------------------------------------------------
-    def test_below_250k_only_status_line(self):
-        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 100_000), "hello")
-        self.assertIn("Context: 100k", self.context(r))
-        self.assertNotIn("systemMessage", r)
+    def test_below_250k_adds_nothing(self):
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 100_000), "hello"), {})
+
+    def test_status_line_comes_with_instruction(self):
+        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 260_000), "go")
+        self.assertIn("Context: 260k", self.context(r))
 
     def test_250k_notice_once(self):
         t = self.transcript("t", 260_000)
@@ -140,8 +142,7 @@ class Guard(unittest.TestCase):
         launch = {"type": "assistant", "timestamp": stamp(90), "message": {"id": "msg_b", "content": [
             {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "x", "run_in_background": True}}]}}
         r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 200_000, 90, extra=[launch]), "status?")
-        self.assertIn("Background jobs still running: 1", self.context(r))
-        self.assertNotIn("BREAK", self.context(r))
+        self.assertEqual(r, {})
 
     def test_break_applies_after_background_job_finished(self):
         launch = {"type": "assistant", "timestamp": stamp(90), "message": {"id": "msg_b", "content": [

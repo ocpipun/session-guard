@@ -59,7 +59,7 @@ Session Guard bir Claude Code **plugin**'idir (eklenti): hook'lar, bir betik ve 
 
 - **Hook'lar** betiği üç anda kendiliğinden çalıştırır: oturum başında, gönderdiğiniz her mesajda ve Claude'un kullandığı her araçtan sonra.
 - **Betik** (`scripts/session_guard.py`, Python, yalnız standart kütüphane) Claude Code'un zaten diskinizde tuttuğu oturum kaydını okur (`~/.claude/projects/...`). Bağlam büyüklüğü Claude'un son yanıtının token kullanımından alınır; ara, o yanıttan bu yana geçen süredir. Sonra:
-  - Claude'un bağlamına bir durum satırı ve eşikte bir talimat ekler,
+  - eşikte (ya da molada, uzun modda, finish session'da) Claude'un bağlamına ölçülen sayılarla bir talimat ekler; normal bir mesaja hiçbir şey eklemez, yani token harcamaz,
   - bir eşik ilk kez geçildiğinde size kısa bir mesaj gösterir,
   - kilitli oturumda mesajları engeller,
   - iş sırasında kesin sınıra gelinirse Claude'un turunu durdurur.
