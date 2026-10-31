@@ -98,13 +98,16 @@ A project opened later that already has its own CLAUDE.md, skills or hooks gets 
 
 Cloud sessions do not install plugins. They do run the hooks and skills that live **inside the repository**, so Session Guard is copied into each repository once. Two ways:
 
-**From the cloud session itself (no computer needed).** In a cloud session of the repository, type:
+**From the cloud session itself (no computer needed),** step by step:
 
-```
-Install Session Guard from https://github.com/ocpipun/session-guard into this repository, following its CLOUD.md.
-```
-
-Claude downloads it from GitHub, reviews the repository's rules with you (same rules as the setup: nothing is removed without your yes, and if you decline nothing is installed), copies it into `.claude/` and asks before committing. The cloud environment's network access must allow github.com. Session Guard surely works from the next session of that repository on.
+1. Open [claude.ai/code](https://claude.ai/code) and start a session on your repository (the first time, claude.ai asks you to connect GitHub and set up a cloud environment; the default network access allows github.com).
+2. Type this message:
+   ```
+   Install Session Guard from https://github.com/ocpipun/session-guard into this repository, following its CLOUD.md.
+   ```
+3. Claude downloads Session Guard from GitHub and shows you a numbered list of the repository's rules that conflict with it. Approve the list, or say which items are not conflicts. If you decline, nothing is installed.
+4. Claude deletes the approved items, copies Session Guard into `.claude/`, creates the missing project files and shows you the changes. Say yes to commit and push.
+5. Start a new cloud session of that repository: Session Guard runs from then on.
 
 **From your computer, where the plugin is installed:** run `/session-guard:cloud-setup` in the project.
 

@@ -98,13 +98,16 @@ Sonradan açılan ve kendi CLAUDE.md'si, skill'i ya da hook'u olan bir proje ayn
 
 Bulut oturumları plugin kurmaz. Ama **deponun içindeki** hook'ları ve skill'leri çalıştırır; bu yüzden Session Guard her depoya bir kez kopyalanır. İki yol var:
 
-**Bulut oturumunun kendisinden (bilgisayar gerekmez).** Deponun bir bulut oturumunda şunu yazın:
+**Bulut oturumunun kendisinden (bilgisayar gerekmez),** adım adım:
 
-```
-Install Session Guard from https://github.com/ocpipun/session-guard into this repository, following its CLOUD.md.
-```
-
-Claude GitHub'dan indirir, deponun kurallarını sizinle inceler (kurulumla aynı kurallar: onayınız olmadan hiçbir şey silinmez; reddederseniz hiçbir şey kurulmaz), `.claude/` klasörüne kopyalar ve commit'ten önce sorar. Bulut ortamının ağ erişimi github.com'a izin vermelidir. Session Guard o deponun bir sonraki oturumundan itibaren kesin çalışır.
+1. [claude.ai/code](https://claude.ai/code) adresini açın ve deponuzda bir oturum başlatın (ilk seferde claude.ai GitHub'ı bağlamanızı ve bir bulut ortamı kurmanızı ister; varsayılan ağ erişimi github.com'a izin verir).
+2. Şu mesajı yazın:
+   ```
+   Install Session Guard from https://github.com/ocpipun/session-guard into this repository, following its CLOUD.md.
+   ```
+3. Claude Session Guard'ı GitHub'dan indirir ve deponun onunla çakışan kurallarını numaralı liste olarak gösterir. Listeyi onaylayın ya da hangi maddenin çakışma olmadığını söyleyin. Reddederseniz hiçbir şey kurulmaz.
+4. Claude onaylanan maddeleri siler, Session Guard'ı `.claude/` klasörüne kopyalar, eksik proje dosyalarını oluşturur ve değişiklikleri gösterir. Commit ve push için "evet" deyin.
+5. O deponun yeni bir bulut oturumunu açın: Session Guard artık çalışır.
 
 **Plugin'in kurulu olduğu bilgisayarınızdan:** projede `/session-guard:cloud-setup` çalıştırın.
 
