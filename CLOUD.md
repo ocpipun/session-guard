@@ -4,7 +4,7 @@ Instructions for Claude, when the user asks in a cloud session (claude.ai/code) 
 https://github.com/ocpipun/session-guard into the current repository. No local computer or plugin is needed.
 Every change goes into the repository.
 
-1. Download: `git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard`.
+1. Download, if `/tmp/session-guard` is not there yet: `git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard`.
    If the network blocks GitHub, tell the user the environment's network access must allow github.com, and stop.
 2. Set `SG` = `python3 /tmp/session-guard/plugins/session-guard/scripts/session_guard.py --project` and `REPO` = the
    repository root.

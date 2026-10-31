@@ -63,7 +63,7 @@ Session Guard is a Claude Code **plugin**: a package of hooks, a script and skil
   - shows you a short message when a threshold is first passed,
   - blocks prompts in a locked session,
   - stops Claude's turn if a hard limit is reached in the middle of work.
-- **Skills** hold the procedures (setup and project review, hand-off, break hand-off, finish session, cloud setup). Claude loads them only when needed.
+- **Skills** hold the procedures (setup and project review, hand-off, break hand-off, finish session). Claude loads them only when needed.
 - **State** is Session Guard's own small record per session in `~/.claude/session_guard/`: is long mode on, is the session locked, which thresholds were already announced. It is not your work: no project file, conversation or Claude data is ever in it. Records unused for 30 days are deleted so the hook stays fast; a locked session's record is never deleted, so an old session stays locked even when reopened months later. The setup approval is kept in `~/.claude/session_guard/config/setup.json`.
 
 Nothing is sent anywhere. The script only reads local files and writes its own state files.
@@ -96,22 +96,13 @@ A project opened later that already has its own CLAUDE.md, skills or hooks gets 
 
 ## Cloud sessions (claude.ai/code)
 
-Cloud sessions do not install plugins. They do run the hooks and skills that live **inside the repository**, so Session Guard is copied into each repository once. Two ways:
+Cloud sessions do not install plugins. Session Guard is installed into each repository once, from a cloud session of that repository, with this one line:
 
-**From the cloud session itself (no computer needed),** step by step:
+```
+Install Session Guard: git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard, then follow /tmp/session-guard/CLOUD.md
+```
 
-1. Open [claude.ai/code](https://claude.ai/code) and start a session on your repository (the first time, claude.ai asks you to connect GitHub and set up a cloud environment; the default network access allows github.com).
-2. Type this message:
-   ```
-   Install Session Guard from https://github.com/ocpipun/session-guard into this repository, following its CLOUD.md.
-   ```
-3. Claude downloads Session Guard from GitHub and shows you a numbered list of the repository's rules that conflict with it. Approve the list, or say which items are not conflicts. If you decline, nothing is installed.
-4. Claude deletes the approved items, copies Session Guard into `.claude/`, creates the missing project files and shows you the changes. Say yes to commit and push.
-5. Start a new cloud session of that repository: Session Guard runs from then on.
-
-**From your computer, where the plugin is installed:** run `/session-guard:cloud-setup` in the project.
-
-Either way the repository must pass the project review first. It copies the script, the hooks and the skills into the repository's `.claude/` folder and creates the missing `CLAUDE.md`, `docs/STATUS.md` and `docs/STATUS_ARCHIVE.md`. Commit and push; from then on cloud sessions of that repository are guarded too. There is no global CLAUDE.md in the cloud, so the project copy gives the general rules at session start. If a cloud session finds a repository without CLAUDE.md, it creates the project files; if it finds rules nobody reviewed, it asks for the review before Session Guard works there. On a machine where the plugin is installed, the project copy stays quiet, so the guard never runs twice.
+Claude downloads Session Guard, shows the repository's rules that conflict with it and asks for your approval (if you decline, nothing is installed), installs it into the repository's `.claude/` folder and asks before committing. From the next cloud session of that repository on, Session Guard runs there. The cloud has no global CLAUDE.md, so the repository copy brings the general rules itself; a repository without CLAUDE.md gets the project files. On a computer where the plugin is installed, the repository copy stays quiet, so the guard never runs twice.
 
 ## Uninstall
 
@@ -124,7 +115,7 @@ Or just ask Claude to uninstall it. Then remove the block between `<!-- session-
 ## Limits and honest notes
 
 - The context number is the size of the *last reply*, so it can lag one step behind. Thresholds are checked again after every tool call while Claude works.
-- A background job or subagent whose "finished" notice never arrives counts as running for at most 24 hours. After that, and when Claude has worked on one message for over 24 hours, Session Guard tells you it may be a bug and suggests `finish session` if it is stuck. A 24-hour timer starts with every prompt (a background hook; the newest prompt replaces the older timer within an hour; the timer is a local check, not a Claude request, so it uses no quota). If 24 hours pass with no new prompt and the session is still busy, it wakes Claude, which tells you. A finished reply waiting for you is not counted. In the cloud the timer dies if the cloud stops an inactive session first.
+- A background job or subagent whose "finished" notice never arrives counts as running for at most 24 hours. After that, and when Claude has worked on one message for over 24 hours, Session Guard tells you it may be a bug and suggests `finish session` if it is stuck. A 24-hour timer starts with every prompt (a background hook; the newest prompt replaces the older timer within a minute; the timer is a local check, not a Claude request, so it uses no quota). If 24 hours pass with no new prompt and the session is still busy, it wakes Claude, which tells you. A finished reply waiting for you is not counted. In the cloud the timer dies if the cloud stops an inactive session first.
 - Cloud use is based on the official documentation (repository hooks and skills run in single-repository cloud sessions; Python 3 is preinstalled). It has not yet been tested in a live cloud session.
 - "Every project" means every project Claude Code has a session for (found from `~/.claude/projects`). Folders never opened in Claude Code are not scanned; they are reviewed when first opened.
 - Whether an item conflicts is decided by Claude and approved by you; the script only finds the candidates.

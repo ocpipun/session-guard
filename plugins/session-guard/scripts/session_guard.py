@@ -103,7 +103,7 @@ WATCH_WAKE = ("[Session Guard] 24-HOUR WATCH: 24 hours have passed since the use
               "agent has been active for 24 hours, please look into it. If you think there is a problem, suggest "
               "ending the session with the command \"finish session\".")
 WATCH_SECONDS = int(os.environ.get("SESSION_GUARD_WATCH_SECONDS") or 24 * 3600)  # tests shorten it
-WATCH_STEP = 3600               # a watch checks once an hour whether a newer prompt replaced it (local file read, no Claude request)
+WATCH_STEP = 60                 # a watch checks once a minute whether a newer prompt replaced it (local file read, no Claude request)
 STALE_USER = ("possible bug: something has been active for over 24 hours. Please look into it; if it is stuck, "
               "end the session with \"finish session\".")
 
@@ -708,7 +708,7 @@ def on_prompt(inp):
 
 def watch(inp):
     """24-hour watch: an async hook (asyncRewake) started with every prompt. The newest prompt's watch replaces the
-    older ones (they see a new token within an hour and exit). After 24 hours with no newer prompt, if the
+    older ones (they see a new token within a minute and exit). After 24 hours with no newer prompt, if the
     session is still busy (a tool running, a background job open, or no answer to the prompt), exit code 2 wakes
     Claude with WATCH_WAKE, so the user is told even when no other hook event happens. A finished turn waiting
     for the user is not a bug: then it exits 0 and costs nothing."""
