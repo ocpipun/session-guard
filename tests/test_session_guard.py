@@ -677,6 +677,14 @@ class Guard(unittest.TestCase):
         self.assertIn("English", self.cli("--set-language", "english"))
         self.assertIn("Session closed", self.finished_block("c"))
 
+    def test_mac_app_language_is_found(self):
+        self.env["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop"
+        folder = os.path.join(self.home, "Library", "Application Support", "Claude")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "config.json"), "w") as fh:
+            json.dump({"locale": "tr"}, fh)
+        self.assertIn("notice language: tr", self.cli("--set-language"))
+
     def test_english_stores_nothing(self):
         self.app_language("en-US")
         self.assertIn("English", self.cli("--set-language"))

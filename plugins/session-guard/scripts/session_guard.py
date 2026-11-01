@@ -328,12 +328,14 @@ _translated = None
 def app_locale():
     """The language selected in the Claude desktop app ("tr", "pt-br", "en"), read once by --set-language at
     setup; None when the app's settings file is not found (then Claude asks the user)."""
-    places = []
+    # Windows (Store app): %LOCALAPPDATA%\Claude-Data\claude_<package>\config.json (measured). macOS
+    # ~/Library/Application Support/Claude, Linux ~/.config/Claude: the same file, from the app's code (not tested).
+    places = [os.path.join(os.environ["CLAUDE_USER_DATA_DIR"], "config.json")] if os.environ.get("CLAUDE_USER_DATA_DIR") else []
     for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA"),
-                 os.path.join(HOME, "Library", "Application Support")):
+                 os.path.join(HOME, "Library", "Application Support"), os.path.join(HOME, ".config")):
         if base:
             places += glob.glob(os.path.join(base, "Claude-Data", "*", "config.json"))
-            places.append(os.path.join(base, "Claude", "config.json"))
+            places += [os.path.join(base, n, "config.json") for n in ("Claude", "Claude-3p")]
     for path in sorted((p for p in places if os.path.isfile(p)), key=os.path.getmtime, reverse=True):
         try:
             with open(path, encoding="utf-8-sig") as fh:
