@@ -755,6 +755,9 @@ class Guard(unittest.TestCase):
         subprocess.run([sys.executable, "-I", SETUP, "--reviewed", repo], capture_output=True, env=self.env, check=True)
         self.assertIn("cloud project", self.run_hook("SessionStart", "s1", cwd=repo)["systemMessage"])
         self.assertIn("cloud project", self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi", cwd=repo)["reason"])
+        self.app_language("tr")
+        self.cli("--set-language")
+        self.assertIn("This repository is a cloud project", self.run_hook("UserPromptSubmit", "s2", self.transcript("t", 50_000), "hi", cwd=repo)["reason"])  # always English
         self.assertFalse(os.path.exists(os.path.join(repo, ".claude", "settings.json")) and
                          "session-guard-home" in self.read(repo, ".claude", "settings.json"))
         shutil.rmtree(os.path.join(self.home, ".claude"))  # a computer without the plugin: the repo copy blocks

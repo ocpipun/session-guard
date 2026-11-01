@@ -25,8 +25,5 @@
  "quota_stop": "Kota %%%(percent)d (%(window)s): mevcut adım bitiriliyor, sonra %(time)s'e kadar kilitli.",
  "setup_pending": "Kurulum bekliyor: Claude bir sonraki mesajınızla başlatacak.",
  "review_pending": "Proje incelemesi bekliyor: Claude bir sonraki mesajınızla başlatacak.",
- "declined": "Kapalı (çakışan kurallar tutuldu).",
- "executive_missing": "Bu bilgisayarda kapalı: kontrol projesi yok. session-guard-executive adlı bir klasör oluşturun, Claude'da açın ve kurulum satırını oraya yapıştırın.",
- "cloud_project_on_computer": "Bu depo bir bulut projesi (Session Guard bulut oturumları için kurulu). Mesajınız gönderilmedi. Bir proje ya bulutta ya bilgisayarda yürütülür, ikisinde birden değil: bulut oturumunda devam edin.",
- "computer_project_in_cloud": "Bu depo bir bilgisayar projesi (Session Guard onu bilgisayarda koruyor). Mesajınız gönderilmedi. Bir proje ya bilgisayarda ya bulutta yürütülür, ikisinde birden değil: bilgisayarda devam edin."
+ "declined": "Kapalı (çakışan kurallar tutuldu)."
 }

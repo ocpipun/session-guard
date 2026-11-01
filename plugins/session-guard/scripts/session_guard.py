@@ -285,6 +285,8 @@ MESSAGES = {
     "computer_project_in_cloud": "This repository is a computer project (Session Guard protects it on the computer). Your message was not sent. A project is worked on either on the computer or in the cloud, never both: continue it on the computer.",
 }
 LANGUAGE_QUESTION = "Which language would you like session-guard notices in?"  # asked where the app language cannot be read (cloud, or its file moved)
+ENGLISH_ONLY = {"executive_missing", "cloud_project_on_computer", "computer_project_in_cloud"}  # user decision
+TRANSLATABLE = [n for n in MESSAGES if n not in ENGLISH_ONLY]
 PLACEHOLDER = re.compile(r"%\((\w+)\)[sd]")
 
 
@@ -375,7 +377,7 @@ def set_language(args):
     _translated = None
     full = {n: t for n, t in load_translation(os.path.join(plugin_messages(), locale + '.json')).items() if valid_translation(n, t)}
     full.update({n: t for n, t in load_translation(os.path.join(own_messages(), locale + '.json')).items() if valid_translation(n, t)})
-    left = [n for n in MESSAGES if n not in full]
+    left = [n for n in TRANSLATABLE if n not in full]
     out("notice language: %s; %s" % (locale, "translation complete" if not left else
         "notices without a translation (English until translated): " + ", ".join(left)))
     return 0
@@ -409,7 +411,7 @@ def valid_translation(name, text):
 
 def msg(name, **values):
     """A user notice in the language chosen at setup when a translation exists, else in English."""
-    text = translations().get(name) if notice_locale() else None
+    text = translations().get(name) if notice_locale() and name not in ENGLISH_ONLY else None
     if valid_translation(name, text):
         try:
             return "Session Guard: " + text % values
@@ -424,7 +426,7 @@ def missing_translations():
     if not locale:
         return None, []
     found = translations()
-    return locale, [n for n in MESSAGES if not valid_translation(n, found.get(n))]
+    return locale, [n for n in TRANSLATABLE if not valid_translation(n, found.get(n))]
 
 
 def set_messages(path):
@@ -436,7 +438,7 @@ def set_messages(path):
     data = load_translation(path)
     stored = {n: t for n, t in load_translation(os.path.join(own_messages(), locale + '.json')).items() if valid_translation(n, t)}
     bad = []
-    for name in MESSAGES:
+    for name in TRANSLATABLE:
         if name in data:
             if valid_translation(name, data[name]):
                 stored[name] = data[name]
@@ -1246,7 +1248,7 @@ def start_context(root):
                          "were not refreshed. Tell the user; the setup (skill session-guard:setup) repairs it.")
         refresh_statusline()
     locale, missing = missing_translations() if notice_locale() else (None, [])
-    if missing and len(missing) < len(MESSAGES):  # a newer version added notices; a new language is the user's call
+    if missing and len(missing) < len(TRANSLATABLE):  # a newer version added notices; a new language is the user's call
         parts.append("Session Guard notices without a translation for the language %s: %s. Translate them now, as "
                      "the setup skill says (\"Notices\"), without mentioning it." % (locale, ", ".join(missing)))
     # A worktree gets the files from its main checkout through git, never a second, diverging copy.
@@ -1681,7 +1683,7 @@ def cli(args):
         locale, missing = missing_translations()
         out("notice language: %s; notices without a translation: %s" % (locale or "English (nothing to translate)",
                                                                         ", ".join(missing) if missing else "none"))
-        out(json.dumps(MESSAGES, ensure_ascii=False, indent=1))
+        out(json.dumps({n: MESSAGES[n] for n in TRANSLATABLE}, ensure_ascii=False, indent=1))
         return 0
     if args[0] == "--set-executive":
         folder = os.path.abspath(args[1] if len(args) > 1 else os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
