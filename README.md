@@ -80,11 +80,21 @@ Session Guard is a Claude Code **plugin**: a package of hooks, a script, skills 
 
 Nothing is sent anywhere. The script only reads local files and writes its own files.
 
+## One home per project: computer or cloud (strict rule)
+
+A project is worked on **either on the computer or in the cloud, never both**, and never at the same time. Quota protection works only on the computer, and two places writing one STATUS.md drift apart.
+
+- A computer project that is a git repository gets a one-line hook in its `.claude/settings.json` (committed with it). On the computer it does nothing; in a cloud session of that repository it blocks every prompt before it reaches Claude.
+- A cloud project carries Session Guard's cloud copy (`.claude/session-guard/`). Opened on a computer, every prompt is blocked.
+- Nothing else is shared: the computer part of Session Guard lives in `~/.claude` and never goes into a repository. Use the plugin on a computer without any GitHub repository; the cloud needs one.
+
 ## Install (computer)
+
+**Strict rule: install and updates run only in a Claude project folder named `session-guard-executive`.** Without this folder Session Guard does not work in computer sessions. Create the folder anywhere, open it in Claude, and use it later to check and install updates (paste the same line again).
 
 Requirements: Claude Code (desktop app or terminal), Python 3 (`python` on Windows, `python3` on macOS/Linux). On Windows, Claude Code should use Git Bash for hooks (the default when Git for Windows is installed).
 
-Paste this one line into Claude Code:
+In a session of `session-guard-executive`, paste this one line:
 
 ```
 Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard", then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard

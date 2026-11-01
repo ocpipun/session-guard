@@ -41,6 +41,7 @@ Other modes:
     session_guard.py --uninstall-statusline   readings); another tool's one is left alone
     session_guard.py --statusline             the status line command itself
     session_guard.py --set-language [code]    notice language (no code: the app's, read once)
+    session_guard.py --set-executive [dir]    records the control project (session-guard-executive)
     session_guard.py --print-messages         the user notices, to translate
     session_guard.py --set-messages file.json stores their translation
     session_guard.py --project                project-copy mode (cloud); does
@@ -279,6 +280,9 @@ MESSAGES = {
     "setup_pending": "Setup pending: Claude starts it with your next message.",
     "review_pending": "Project review pending: Claude starts it with your next message.",
     "declined": "Off (conflicting rules were kept).",
+    "executive_missing": "Off on this computer: its control project is missing. Create a folder named session-guard-executive, open it in Claude and paste the install line there.",
+    "cloud_project_on_computer": "This repository is a cloud project (Session Guard is installed in it for cloud sessions). Your message was not sent. A project is worked on either in the cloud or on the computer, never both: continue it in a cloud session.",
+    "computer_project_in_cloud": "This repository is a computer project (Session Guard protects it on the computer). Your message was not sent. A project is worked on either on the computer or in the cloud, never both: continue it on the computer.",
 }
 LANGUAGE_QUESTION = "Which language would you like session-guard notices in?"  # asked where the app language cannot be read (cloud, or its file moved)
 PLACEHOLDER = re.compile(r"%\((\w+)\)[sd]")
@@ -621,6 +625,57 @@ def closed_kind(state):
     return "context"
 
 
+# --- one home per project: the computer or the cloud, never both -------------------
+# Session Follow (quota) works only on the computer, and two places writing one STATUS.md diverge. A cloud
+# project carries the cloud copy (.claude/session-guard/session_guard.py); on a computer its prompts are blocked.
+# A computer project that is a git repository gets a one-line hook in its .claude/settings.json (committed with
+# it): it does nothing on the computer and blocks every prompt of a cloud session of the same repository.
+HOME_SIGN = "session-guard-home"
+EXECUTIVE = "session-guard-executive"  # the control project: install and updates on a computer run only there
+
+
+def in_cloud():
+    return os.environ.get("CLAUDE_CODE_REMOTE") == "true"
+
+
+def cloud_owned(root):
+    return bool(root) and os.path.isfile(os.path.join(root, ".claude", "session-guard", "session_guard.py"))
+
+
+def has_home_guard(settings):
+    hooks = settings.get("hooks") if isinstance(settings, dict) else None
+    return isinstance(hooks, dict) and any(
+        HOME_SIGN in str(h.get("command")) for groups in hooks.values() if isinstance(groups, list)
+        for g in groups if isinstance(g, dict) for h in g.get("hooks", []) if isinstance(h, dict))
+
+
+def ensure_home_guard(root):
+    """Adds the cloud-blocking hook to a computer project's .claude/settings.json; True when it was added."""
+    if not root or not os.path.exists(os.path.join(root, ".git")) or cloud_owned(root):
+        return False
+    path = os.path.join(root, ".claude", "settings.json")
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            settings = json.load(fh)
+    except FileNotFoundError:
+        settings = {}
+    except (OSError, ValueError):
+        return False  # a broken file is left alone
+    if not isinstance(settings, dict) or has_home_guard(settings) or not isinstance(settings.setdefault("hooks", {}), dict):
+        return False
+    groups = settings["hooks"].setdefault("UserPromptSubmit", [])
+    if not isinstance(groups, list):
+        return False
+    block = json.dumps({"decision": "block", "reason": msg("computer_project_in_cloud")}).replace("'", "\\u0027")
+    groups.append({"hooks": [{"type": "command", "timeout": 5, "command":
+                   "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && printf '%%s' '%s'; exit 0 # %s" % (block, HOME_SIGN)}]})
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(settings, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    return True
+
+
 def safe_name(sid):
     return re.sub(r"[^A-Za-z0-9-]", "_", sid or "none")
 
@@ -961,7 +1016,8 @@ def settings_hooks(path):
         return []
     return ["%s: %s" % (event, h.get("command") or h.get("type")) for event, groups in hooks.items()
             if isinstance(groups, list) for g in groups if isinstance(g, dict)
-            for h in g.get("hooks", []) if isinstance(h, dict) and "session_guard.py" not in (h.get("command") or "")]
+            for h in g.get("hooks", []) if isinstance(h, dict) and "session_guard.py" not in (h.get("command") or "")
+            and HOME_SIGN not in (h.get("command") or "")]
 
 
 def review_items(root, is_global=False):
@@ -1075,6 +1131,8 @@ def activation(root):
         return "setup"
     if cfg["global"] == "declined":
         return "declined"
+    if not cfg.get("executive") or not os.path.isdir(cfg["executive"]):
+        return "executive"
     if root is None:
         return "active"
     status = cfg["projects"].get(key(main_checkout(root)))
@@ -1097,6 +1155,11 @@ def inactive(state, root, event="SessionStart"):
         ctx, user = SETUP_NEEDED % (skill, command()), "setup_pending"
     elif state == "review":
         ctx, user = REVIEW_NEEDED % (root, skill, command()), "review_pending"
+    elif state == "executive":
+        ctx, user = ("[Session Guard] OFF on this computer: its control project (a folder named %s, where it is "
+                     "installed and updated) is missing. Do not apply Session Guard rules. Tell the user in one line: "
+                     "create a folder named %s, open it in Claude and paste the install line from the README there."
+                     % (EXECUTIVE, EXECUTIVE)), "executive_missing"
     else:
         ctx, user = DECLINED % (" in this project" if root else "", skill), "declined"
     data = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": ctx}}
@@ -1188,6 +1251,10 @@ def start_context(root):
                      "the setup skill says (\"Notices\"), without mentioning it." % (locale, ", ".join(missing)))
     # A worktree gets the files from its main checkout through git, never a second, diverging copy.
     made = create_project_files(root) if root and main_checkout(root) == root else []
+    if not PROJECT_MODE and root and main_checkout(root) == root and ensure_home_guard(root):
+        parts.append("Session Guard added its cloud guard to %s (a hook that blocks cloud sessions of this computer "
+                     "project; it does nothing here). Commit it with your work; tell the user in one line." % (
+                         os.path.join(root, ".claude", "settings.json")))
     if made:
         parts.append("Session Guard created %s in %s (missing files only; existing files are never touched)%s." % (
             ", ".join(made), root, ". Commit them with your work" if PROJECT_MODE else ""))
@@ -1216,6 +1283,10 @@ def on_session_start(inp):
     sid = inp.get("session_id")
     resume = inp.get("source") == "resume"
     root = project_root(inp)
+    if PROJECT_MODE and not in_cloud() or not PROJECT_MODE and cloud_owned(root):
+        text = msg("cloud_project_on_computer")
+        return emit({"systemMessage": text, "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
+                     "[Session Guard] " + text + " Every prompt of this session is blocked."}})
     state = activation(root)
     if state == "declined":
         mark_started(sid, False)
@@ -1226,7 +1297,7 @@ def on_session_start(inp):
         return quota_start(sid, hit)
     if state != "active":
         mark_started(sid, False)
-        return emit(inactive(state, root))
+        return 0 if resume and state == "executive" else emit(inactive(state, root))
     if resume:
         # The conversation already holds the rules if it got them before; one that started before the install or
         # while setup was pending gets them with its next prompt.
@@ -1238,8 +1309,10 @@ def on_session_start(inp):
 
 def on_prompt(inp):
     root = project_root(inp)
+    if PROJECT_MODE and not in_cloud() or not PROJECT_MODE and cloud_owned(root):
+        return emit({"decision": "block", "reason": msg("cloud_project_on_computer")})
     act = activation(root)
-    if act == "declined":
+    if act in ("declined", "executive"):
         return 0
     sid = inp.get("session_id")
     mark = started(sid)
@@ -1375,8 +1448,11 @@ def watch(inp):
 def on_tool(inp):
     """While Claude works: takes quota readings, tells once when a new threshold is passed, stops the turn at the
     hard limit and 15 minutes after a quota stop."""
-    act = activation(project_root(inp))
-    if act == "declined":
+    root = project_root(inp)
+    if PROJECT_MODE and not in_cloud() or not PROJECT_MODE and cloud_owned(root):
+        return 0
+    act = activation(root)
+    if act in ("declined", "executive"):
         return 0
     if inp.get("tool_name") == USAGE_TOOL and not PROJECT_MODE:
         take_usage(inp.get("tool_response"))
@@ -1607,6 +1683,16 @@ def cli(args):
                                                                         ", ".join(missing) if missing else "none"))
         out(json.dumps(MESSAGES, ensure_ascii=False, indent=1))
         return 0
+    if args[0] == "--set-executive":
+        folder = os.path.abspath(args[1] if len(args) > 1 else os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+        if os.path.basename(folder).lower() != EXECUTIVE:
+            out("not recorded: %s is not a folder named %s. Install and update Session Guard from that folder." % (folder, EXECUTIVE))
+            return 1
+        cfg = load_config()
+        cfg["executive"] = folder
+        save_config(cfg)
+        out("control project: %s" % folder)
+        return 0
     if args[0] == "--set-language":
         return set_language(args[1:])
     if args[0] == "--set-messages":
@@ -1614,7 +1700,9 @@ def cli(args):
     if args[0] == "--create-files":
         root = main_checkout(os.path.abspath(args[1] if len(args) > 1 else os.getcwd()))
         made = create_project_files(root)
-        out("project files created in %s: %s" % (root, ", ".join(made) if made else "none (all present)"))
+        guard = not PROJECT_MODE and ensure_home_guard(root)
+        out("project files created in %s: %s%s" % (root, ", ".join(made) if made else "none (all present)",
+            "; cloud guard added to .claude/settings.json" if guard else ""))
         return 0
     if args[0] == "--install-statusline":
         out("status line (%s): %s" % (SETTINGS, install_statusline()))
@@ -1645,7 +1733,7 @@ def main():
             return 0
     if args[:1] and args[0] in ("--scan", "--install-global", "--setup", "--print-rules", "--create-files",
                                 "--install-statusline", "--uninstall-statusline", "--print-messages", "--set-messages",
-                                "--set-language"):
+                                "--set-language", "--set-executive"):
         return cli(args)
     try:
         if PROJECT_MODE and plugin_installed():

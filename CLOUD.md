@@ -7,7 +7,8 @@ Every change goes into the repository. Everything happens in this session; no se
 1. Download, if `/tmp/session-guard` is not there yet: `git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard`.
    If the network blocks GitHub, tell the user the environment's network access must allow github.com, and stop.
 2. `SG` = `python3 /tmp/session-guard/plugins/session-guard/scripts/session_guard.py --project`, `REPO` = the
-   repository root. Copy nothing yet.
+   repository root. Copy nothing yet. A computer project (its `.claude/settings.json` has a `session-guard-home`
+   hook) is not installed into: a project lives either on the computer or in the cloud, never both.
 3. Project review: follow "What counts as a conflict", "Similar files" and "Project review" in
    `/tmp/session-guard/plugins/session-guard/skills/setup/SKILL.md` for `REPO` (`$SG --scan "$REPO"`, read, one
    numbered list). In the same message, in English and word for word, ask:

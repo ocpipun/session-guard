@@ -4,6 +4,10 @@ Instructions for Claude, when the user asks to install Session Guard from https:
 on their computer (desktop app or terminal). Everything happens in this session; restarting the app is the last
 step. After the restart the user types nothing and is asked nothing.
 
+0. Control project: install and updates run only in a Claude project folder named exactly
+   `session-guard-executive`. If this session's project folder has another name, tell the user (in their language)
+   to create a folder named `session-guard-executive`, open it in Claude and paste the install line there; stop.
+   Without this folder Session Guard stays off on the computer.
 1. Get the files: `claude plugin marketplace add ocpipun/session-guard` (if it is already added, e.g. an older
    Session Guard is installed: `claude plugin marketplace update session-guard`). Nothing is removed by hand: an
    older version is updated in step 5.
@@ -15,7 +19,7 @@ step. After the restart the user types nothing and is asked nothing.
    scripts, hooks) are conflicts like any other and go into the list.
 4. The user declines: `SG --setup declined`; nothing is installed (an older version stays as it is). Stop here.
 5. The user approves: do step 5 of the skill (changes, project files, global block, status line, notices,
-   `SG --setup approved --all`). Then, as the very last command: `claude plugin install session-guard@session-guard`,
+   `SG --set-executive`, `SG --setup approved --all`). Then, as the very last command: `claude plugin install session-guard@session-guard`,
    or `claude plugin update session-guard@session-guard` if an older version is installed (it applies at the
    restart, so open sessions keep working until then). If the `claude` command is not available, ask the user to
    type `/plugin install session-guard@session-guard` (or `/plugin update ...`).

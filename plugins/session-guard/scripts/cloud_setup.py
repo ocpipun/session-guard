@@ -57,6 +57,15 @@ def main():
     args = [a for a in sys.argv[1:] if a != "--reviewed"]
     REPO = os.path.abspath(args[0] if args else os.getcwd())
     claude = os.path.join(REPO, ".claude")
+    try:
+        with open(os.path.join(claude, "settings.json"), encoding="utf-8-sig") as fh:
+            computer = sg.has_home_guard(json.load(fh))
+    except (OSError, ValueError):
+        computer = False
+    if computer:
+        print("Not installed: %s is a computer project (its .claude/settings.json has Session Guard's computer guard)." % REPO)
+        print("A project is worked on either on the computer or in the cloud, never both.")
+        return 1
     os.makedirs(os.path.join(claude, "session-guard"), exist_ok=True)
     shutil.copyfile(os.path.join(HERE, "session_guard.py"), os.path.join(claude, "session-guard", "session_guard.py"))
     folder = os.path.join(claude, "session-guard", "messages")  # the plugin's translations; the user's go here too

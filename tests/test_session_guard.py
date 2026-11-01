@@ -33,6 +33,9 @@ class Guard(unittest.TestCase):
         # the desktop app's language setting is looked up here: never the real one
         self.env.update(LOCALAPPDATA=os.path.join(self.home, "local"), APPDATA=os.path.join(self.home, "roaming"))
         self.cli("--setup", "approved")
+        self.executive = os.path.join(self.home, "work", "session-guard-executive")
+        os.makedirs(self.executive)
+        self.cli("--set-executive", self.executive)
 
     def cli(self, *args, script=SCRIPT):
         r = subprocess.run([sys.executable, "-I", script, *args], capture_output=True, env=self.env)
@@ -421,7 +424,7 @@ class Guard(unittest.TestCase):
         subprocess.run([sys.executable, "-I", SETUP, repo], capture_output=True, env=self.env, check=True)
         self.assertEqual(self.read(repo, "CLAUDE.md"), "old rules")
         self.assertFalse(os.path.exists(os.path.join(repo, "docs")))
-        cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
+        cloud = dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=repo)
         data = json.dumps({"hook_event_name": "SessionStart", "session_id": "s", "source": "startup"}).encode()
         copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
         r = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
@@ -436,7 +439,7 @@ class Guard(unittest.TestCase):
         subprocess.run([sys.executable, "-I", SETUP, "--reviewed", repo], capture_output=True, env=self.env, check=True)
         self.assertTrue(os.path.exists(os.path.join(repo, "docs", "STATUS.md")))
         shutil.rmtree(os.path.join(self.home, ".claude"))
-        cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
+        cloud = dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=repo)
         data = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "old", "prompt": "next"}).encode()
         copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
         r = json.loads(subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud).stdout)
@@ -453,7 +456,7 @@ class Guard(unittest.TestCase):
         self.assertEqual(len(settings["hooks"]["UserPromptSubmit"]), 2)  # guard + 24-hour watch
         self.assertIn("name: session-guard-setup", self.read(repo, ".claude", "skills", "session-guard-setup", "SKILL.md"))
         copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
-        cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
+        cloud = dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=repo)
         shutil.rmtree(os.path.join(self.home, ".claude", "session_guard"))  # the cloud has no setup.json of the user
         data = json.dumps({"hook_event_name": "SessionStart", "session_id": "s", "source": "startup"}).encode()
         alone = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
@@ -467,7 +470,7 @@ class Guard(unittest.TestCase):
 
     def test_cloud_copy_creates_files_or_asks_for_review(self):
         bare = self.project("bare")
-        cloud = dict(self.env, CLAUDE_PROJECT_DIR=bare)
+        cloud = dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=bare)
         data = json.dumps({"hook_event_name": "SessionStart", "session_id": "s", "source": "startup"}).encode()
         r = subprocess.run([sys.executable, "-I", SCRIPT, "--project"], input=data, capture_output=True, env=cloud)
         self.assertIn("Commit them", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
@@ -502,6 +505,7 @@ class Guard(unittest.TestCase):
         self.assertNotIn("decision", r)  # the user's answers to the setup get through
         self.assertIn("SETUP PENDING", self.context(r))
         self.cli("--setup", "approved")
+        self.cli("--set-executive", self.executive)
         self.assertIn("Fully quit Claude", self.run_hook("UserPromptSubmit", "s1", t, "next", fresh=True)["reason"])
 
     def test_resumed_session_with_rules_gets_nothing_again(self):
@@ -514,6 +518,7 @@ class Guard(unittest.TestCase):
         self.run_hook("SessionStart", "s1")
         self.run_hook("SessionStart", "s2")
         self.cli("--setup", "approved")
+        self.cli("--set-executive", self.executive)
         for sid in ("s1", "s2"):
             r = self.run_hook("UserPromptSubmit", sid, self.transcript(sid, 50_000, msg_ids=(sid,)), "next")
             self.assertIn("Reply style", self.context(r))
@@ -705,7 +710,7 @@ class Guard(unittest.TestCase):
         repo = self.project("repo")
         subprocess.run([sys.executable, "-I", SETUP, repo], capture_output=True, env=self.env, check=True)
         shutil.rmtree(os.path.join(self.home, ".claude"))
-        cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
+        cloud = dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=repo)
         copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
         run = lambda *a: subprocess.run([sys.executable, "-I", copy, "--project", *a], capture_output=True, env=cloud).stdout.decode()
         self.assertIn("Which language would you like session-guard notices in?", run("--set-language"))
@@ -717,6 +722,47 @@ class Guard(unittest.TestCase):
             data = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "n", "prompt": prompt}).encode()
             r = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
         self.assertIn("Oturum kapandı", json.loads(r.stdout)["reason"])
+
+
+    # --- one home per project; control project ----------------------------------
+    def test_without_control_project_off_on_computer(self):
+        shutil.rmtree(self.executive)
+        self.assertIn("session-guard-executive", self.run_hook("SessionStart", "s1")["systemMessage"])
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 410_000), "go"), {})
+        self.assertIn("not recorded", self.cli("--set-executive", self.project("elsewhere")))
+
+    def test_computer_project_gets_cloud_guard(self):
+        root = self.project("app", {".claude/settings.json": json.dumps({"permissions": {"allow": ["Bash(ls)"]}})})
+        os.makedirs(os.path.join(root, ".git"))
+        self.cli("--setup", "approved", root)
+        self.assertIn("cloud guard", self.context(self.run_hook("SessionStart", "s1", cwd=root)))
+        settings = json.loads(self.read(root, ".claude", "settings.json"))
+        self.assertEqual(settings["permissions"]["allow"], ["Bash(ls)"])
+        command = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        self.assertNotIn("cloud guard", self.context(self.run_hook("SessionStart", "s2", cwd=root)))  # added once
+        self.assertNotIn("Stop:", self.cli("--scan", root))  # the guard is not a conflict
+        here = subprocess.run(["bash", "-c", command], capture_output=True, env=self.env)
+        self.assertEqual(here.stdout, b"")  # on the computer it does nothing
+        cloud = subprocess.run(["bash", "-c", command], capture_output=True, env=dict(self.env, CLAUDE_CODE_REMOTE="true"))
+        self.assertEqual(json.loads(cloud.stdout)["decision"], "block")
+        r = subprocess.run([sys.executable, "-I", SETUP, "--reviewed", root], capture_output=True, env=self.env)
+        self.assertEqual(r.returncode, 1)  # no cloud copy in a computer project
+        self.assertFalse(os.path.exists(os.path.join(root, ".claude", "session-guard")))
+
+    def test_cloud_project_blocked_on_computer(self):
+        repo = self.project("cloudrepo", {"CLAUDE.md": "rules"})
+        os.makedirs(os.path.join(repo, ".git"))
+        subprocess.run([sys.executable, "-I", SETUP, "--reviewed", repo], capture_output=True, env=self.env, check=True)
+        self.assertIn("cloud project", self.run_hook("SessionStart", "s1", cwd=repo)["systemMessage"])
+        self.assertIn("cloud project", self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi", cwd=repo)["reason"])
+        self.assertFalse(os.path.exists(os.path.join(repo, ".claude", "settings.json")) and
+                         "session-guard-home" in self.read(repo, ".claude", "settings.json"))
+        shutil.rmtree(os.path.join(self.home, ".claude"))  # a computer without the plugin: the repo copy blocks
+        data = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "x", "prompt": "hi"}).encode()
+        copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
+        r = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True,
+                           env=dict(self.env, CLAUDE_PROJECT_DIR=repo))
+        self.assertIn("cloud project", json.loads(r.stdout)["reason"])
 
 
 if __name__ == "__main__":

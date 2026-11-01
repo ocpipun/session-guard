@@ -58,6 +58,9 @@ session-start message "notices without a translation" (after an update) means: t
    Then say, in short:
    - the global CLAUDE.md gets the Session Guard block (created if missing; the user's other rules stay);
    - missing CLAUDE.md, docs/STATUS.md, docs/STATUS_ARCHIVE.md are created;
+   - on a computer: each project that is a git repository gets a one-line hook in its `.claude/settings.json`
+     that blocks cloud sessions of it (a project lives either on the computer or in the cloud); a repository
+     that already has the cloud copy is a cloud project and is blocked on the computer;
    - on a computer (not in a repository copy): Session Guard writes a status line command into
      `~/.claude/settings.json` (key `statusLine`). Why: in the terminal it gives Session Guard the 5-hour and weekly
      quota at zero token cost, so a session can stop before the quota runs out (the desktop app does not run status

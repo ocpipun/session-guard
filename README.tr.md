@@ -80,11 +80,21 @@ Session Guard bir Claude Code **eklentisidir**: hook'lar, bir betik, skill'ler v
 
 Hiçbir yere bir şey gönderilmez. Betik yalnız yerel dosyaları okur ve kendi dosyalarını yazar.
 
+## Her projenin tek yeri: bilgisayar ya da bulut (kesin kural)
+
+Bir proje **ya bilgisayarda ya bulutta yürütülür, ikisinde birden asla**, aynı anda da asla. Kota koruması yalnız bilgisayarda çalışır ve aynı STATUS.md'yi iki yerden yazmak birbirinden ayrılan iki sürüm doğurur.
+
+- Git deposu olan bir bilgisayar projesi `.claude/settings.json` dosyasına tek satırlık bir hook alır (projeyle birlikte commit edilir). Bilgisayarda hiçbir şey yapmaz; o deponun bulut oturumunda her mesajı Claude'a ulaşmadan engeller.
+- Bir bulut projesi Session Guard'ın bulut kopyasını taşır (`.claude/session-guard/`). Bilgisayarda açılırsa her mesaj engellenir.
+- Başka hiçbir şey ortak değildir: Session Guard'ın bilgisayar parçası `~/.claude` içinde durur, hiçbir depoya girmez. Eklentiyi bilgisayarda GitHub deposu olmadan kullanabilirsiniz; bulut için depo gerekir.
+
 ## Kurulum (bilgisayar)
+
+**Kesin kural: kurulum ve güncellemeler yalnız `session-guard-executive` adlı bir Claude proje klasöründe yapılır.** Bu klasör olmadan Session Guard bilgisayar oturumlarında çalışmaz. Klasörü istediğiniz yerde oluşturun, Claude'da açın; güncellemeleri denetlemek ve kurmak için de sonra burayı kullanın (aynı satırı yeniden yapıştırın).
 
 Gerekenler: Claude Code (masaüstü uygulaması ya da terminal), Python 3 (Windows'ta `python`, macOS/Linux'ta `python3`). Windows'ta Claude Code hook'lar için Git Bash kullanmalı (Git for Windows kuruluysa varsayılan budur).
 
-Şu tek satırı Claude Code'a yapıştırın:
+`session-guard-executive` içindeki bir oturuma şu tek satırı yapıştırın:
 
 ```
 Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard", then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
