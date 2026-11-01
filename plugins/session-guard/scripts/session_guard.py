@@ -358,8 +358,8 @@ def set_language(args):
     """--set-language [code|english]: no code = the desktop app's current setting, read this one time."""
     locale = args[0].lower().replace("_", "-") if args else (None if PROJECT_MODE else app_locale())
     if not locale:
-        out("app language not found: ask the user in English which language they want Session Guard notices in, "
-            "then run --set-language <code>")
+        out("app language not found: ask the user, in English and word for word: \"%s\" Then run "
+            "--set-language <code> with the answer." % LANGUAGE_QUESTION)
         return 1
     if locale in ("en", "english") or locale.startswith("en-"):
         store_locale(None)
