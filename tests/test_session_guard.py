@@ -648,34 +648,38 @@ class Guard(unittest.TestCase):
         for name, text in tr.items():
             self.assertEqual(sorted(re.findall(r"%\((\w+)\)[sd]", text)), sorted(re.findall(r"%\((\w+)\)[sd]", catalog[name])), name)
 
-    def test_desktop_app_language_picks_the_notices(self):
+    def test_language_chosen_once_at_setup(self):
         self.app_language("tr")
+        self.assertIn("notice language: tr; translation complete", self.cli("--set-language"))
         self.assertEqual(self.finished_block("a"), "Session Guard: Oturum kapandı (finish session). Yeni bir oturum açın.")
         self.follow("five_hour", 92, 2 * 3600)
         self.run_hook("UserPromptSubmit", "q", self.transcript("q", 50_000, msg_ids=("q",)), "go")
         self.assertIn("Kota %92 (5 saatlik)", self.run_hook("UserPromptSubmit", "q", self.transcript("q", 50_000, msg_ids=("q",)), "go")["reason"])
-        self.app_language("fr")  # switched to a language with no translation: English
-        self.assertIn("Session closed (finish session)", self.finished_block("b"))
+        self.follow("five_hour", 10, 2 * 3600)
+        self.app_language("fr")  # the app setting is never checked again
+        self.assertIn("Oturum kapandı", self.finished_block("b"))
         self.env.pop("CLAUDE_CODE_ENTRYPOINT")  # terminal: English
-        self.app_language("tr")
-        self.env.pop("CLAUDE_CODE_ENTRYPOINT")
         self.assertIn("Session closed (finish session)", self.finished_block("c"))
 
-    def test_user_adds_a_translation(self):
-        self.app_language("fr")
-        self.assertIn("app language: fr", self.cli("--print-messages"))
+    def test_user_asks_for_another_language(self):
+        self.app_language("tr")
+        self.cli("--set-language")
+        self.assertIn("without a translation", self.cli("--set-language", "fr"))  # no French yet: English
+        self.assertIn("Session closed (finish session)", self.finished_block("a"))
         path = os.path.join(self.home, "fr.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump({"closed_finish": "Session fermée (finish session). Ouvrez une nouvelle session.",
                        "hard_limit": "Contexte trop grand."}, fh)  # placeholder dropped: rejected
-        report = self.cli("--set-messages", path)
-        self.assertIn("rejected (placeholders changed): hard_limit", report)
-        self.assertEqual(self.finished_block("a"), "Session Guard: Session fermée (finish session). Ouvrez une nouvelle session.")
+        self.assertIn("rejected (placeholders changed): hard_limit", self.cli("--set-messages", path))
+        self.assertEqual(self.finished_block("b"), "Session Guard: Session fermée (finish session). Ouvrez une nouvelle session.")
         self.assertIn("hard limit", self.run_hook("UserPromptSubmit", "z", self.transcript("z", 410_000, msg_ids=("z",)), "go")["reason"])
-        self.assertIn("without a translation for the app language fr", self.context(self.run_hook("SessionStart", "s4")))
+        self.assertIn("without a translation for the language fr", self.context(self.run_hook("SessionStart", "s4")))
+        self.assertIn("English", self.cli("--set-language", "english"))
+        self.assertIn("Session closed", self.finished_block("c"))
 
-    def test_english_app_stores_nothing(self):
+    def test_english_stores_nothing(self):
         self.app_language("en-US")
+        self.assertIn("English", self.cli("--set-language"))
         path = os.path.join(self.home, "x.json")
         with open(path, "w") as fh:
             json.dump({"declined": "x"}, fh)

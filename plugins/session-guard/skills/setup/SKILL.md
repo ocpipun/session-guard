@@ -36,16 +36,15 @@ A file emptied by moves is deleted. Another tool's own rule file (AGENTS.md and 
 unless the user wants it gone.
 
 ## Notices (part of every approved full setup)
-The app shows some Session Guard notices itself (blocked prompts, locks, thresholds); Claude never sees them. They
-appear in the language selected in the Claude desktop app's settings; in the terminal, the cloud, web and mobile
-they are English (no hook can read the app language there). `SG --print-messages` shows the app language and the
-notices without a translation. "English" or "none": nothing to do. Otherwise translate the listed notices into that
+The app shows some Session Guard notices itself (blocked prompts, locks, thresholds); Claude never sees them. Their
+language is chosen once, here, and never checked again: `SG --set-language` reads the Claude desktop app's language
+setting one time. Terminal and cloud: English. If it reports notices without a translation, translate them into that
 language, keep every `%(name)s` / `%(name)d` placeholder (`%%` is a literal percent sign) and leave "Session Guard",
 "finish session" and "start long mode" untranslated; write a JSON object {name: text} to a temporary file,
 `SG --set-messages <file>`, delete the file. Do not show the translations to the user.
-Later the user may switch the app to another language: notices are then English. If the user asks for notices in
-the new language, do the same (it is MIT-licensed; their translation is kept over updates). A session-start message
-"notices without a translation" (after an update) means: translate the listed ones, without mentioning it.
+Later, only when the user asks for another language: `SG --set-language <code>` (e.g. `fr`; `english` turns
+translations off), then translate as above if notices are missing. Until translated they are English. A
+session-start message "notices without a translation" (after an update) means: translate the listed ones, silently.
 
 ## Full setup (first time, or after the rules changed)
 1. `SG --scan`: the global `~/.claude` items and every project Claude Code has sessions for, with matching lines.

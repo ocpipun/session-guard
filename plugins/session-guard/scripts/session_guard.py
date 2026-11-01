@@ -40,6 +40,7 @@ Other modes:
     session_guard.py --install-statusline     signed terminal status line (quota
     session_guard.py --uninstall-statusline   readings); another tool's one is left alone
     session_guard.py --statusline             the status line command itself
+    session_guard.py --set-language [code]    notice language (no code: the app's, read once)
     session_guard.py --print-messages         the user notices, to translate
     session_guard.py --set-messages file.json stores their translation
     session_guard.py --project                project-copy mode (cloud); does
@@ -244,10 +245,10 @@ DECLINED = ("[Session Guard] OFF%s: the user kept rules that conflict with it. D
 
 
 # --- notices the user sees directly (shown by the app; Claude never sees them, so it cannot translate them) ---
-# Language: the one selected in the Claude desktop app's settings (read from the app's local config; not a
-# documented file, so anything unexpected means English). Terminal, cloud, web and mobile: English. Translations:
-# the user's own (~/.claude/session_guard/config/messages/<locale>.json, written by --set-messages during setup
-# or on request) or the plugin's (messages/<locale>.json). A locale with no translation: English.
+# Language: chosen once, at setup (--set-language reads the Claude desktop app's language setting one time) or
+# when the user asks for another one; it is never checked again. Terminal and cloud: English. Translations: the
+# user's own (~/.claude/session_guard/config/messages/<locale>.json, written by --set-messages) or the plugin's
+# (messages/<locale>.json). A language with no translation: English. Translating is the user's business (MIT).
 # Placeholders: %(name)s / %(name)d.
 MESSAGES = {
     "n400": "Context 400k: hard limit. Session closed, open a new session.",
@@ -285,10 +286,8 @@ _translated = None
 
 
 def app_locale():
-    """The language selected in the Claude desktop app ("tr", "pt-br"), or None (English): not the desktop app,
-    a repository copy (cloud), English, or the app's config not found."""
-    if PROJECT_MODE or os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop":
-        return None
+    """The language selected in the Claude desktop app ("tr", "pt-br"), read once by --set-language at setup;
+    None (English) when it is English or the app's settings file is not found."""
     places = []
     for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA"),
                  os.path.join(HOME, "Library", "Application Support")):
@@ -305,6 +304,34 @@ def app_locale():
             found = found.lower().replace("_", "-")
             return None if found == "en" or found.startswith("en-") else found
     return None
+
+
+def notice_locale():
+    """The language chosen at setup, for the desktop app only; None (English) in the terminal and the cloud."""
+    if PROJECT_MODE or os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop":
+        return None
+    return load_config().get("locale") or None
+
+
+def set_language(args):
+    """--set-language [code|english]: no code = the desktop app's current setting, read this one time."""
+    locale = (args[0].lower().replace("_", "-") if args else app_locale()) or "english"
+    cfg = load_config()
+    if locale in ("en", "english") or locale.startswith("en-"):
+        cfg.pop("locale", None)
+        save_config(cfg)
+        out("notice language: English")
+        return 0
+    cfg["locale"] = locale
+    save_config(cfg)
+    global _translated
+    _translated = None
+    full = {n: t for n, t in load_translation(translation_file(locale, own=False)).items() if valid_translation(n, t)}
+    full.update({n: t for n, t in load_translation(translation_file(locale)).items() if valid_translation(n, t)})
+    left = [n for n in MESSAGES if n not in full]
+    out("notice language: %s; %s" % (locale, "translation complete" if not left else
+        "notices without a translation (English until translated): " + ", ".join(left)))
+    return 0
 
 
 def translation_file(locale, own=True):
@@ -324,7 +351,7 @@ def translations():
     """The notices for the app's language: the user's own translation over the plugin's; {} for English."""
     global _translated
     if _translated is None:
-        locale = app_locale()
+        locale = load_config().get("locale")
         _translated = {}
         if locale:
             _translated.update(load_translation(translation_file(locale, own=False)))
@@ -338,8 +365,8 @@ def valid_translation(name, text):
 
 
 def msg(name, **values):
-    """A user notice in the app's language when a translation exists, else in English."""
-    text = translations().get(name)
+    """A user notice in the language chosen at setup when a translation exists, else in English."""
+    text = translations().get(name) if notice_locale() else None
     if valid_translation(name, text):
         try:
             return "Session Guard: " + text % values
@@ -349,9 +376,8 @@ def msg(name, **values):
 
 
 def missing_translations():
-    """(locale, notices without a translation) for the app's language; (None, []) for English. Every notice is
-    missing when no translation exists yet (first setup, or the user switched the app to a new language)."""
-    locale = app_locale()
+    """(locale, notices without a translation) for the language chosen at setup; (None, []) for English."""
+    locale = load_config().get("locale")
     if not locale:
         return None, []
     found = translations()
@@ -359,10 +385,10 @@ def missing_translations():
 
 
 def set_messages(path):
-    """Stores a translation for the app's current language in the user's own file (kept over plugin updates)."""
-    locale = app_locale()
+    """Stores a translation for the chosen language in the user's own file (kept over plugin updates)."""
+    locale = load_config().get("locale")
     if not locale:
-        out("not stored: the Claude desktop app's language is English or cannot be read, so notices stay English")
+        out("not stored: the notice language is English (choose one first with --set-language)")
         return 1
     data = load_translation(path)
     stored = {n: t for n, t in load_translation(translation_file(locale)).items() if valid_translation(n, t)}
@@ -1117,9 +1143,9 @@ def start_context(root):
             parts.append("WARNING: the session-guard markers in ~/.claude/CLAUDE.md are damaged, so the general rules "
                          "were not refreshed. Tell the user; the setup (skill session-guard:setup) repairs it.")
         refresh_statusline()
-    locale, missing = missing_translations()
+    locale, missing = missing_translations() if notice_locale() else (None, [])
     if missing and len(missing) < len(MESSAGES):  # a newer version added notices; a new language is the user's call
-        parts.append("Session Guard notices without a translation for the app language %s: %s. Translate them now, as "
+        parts.append("Session Guard notices without a translation for the language %s: %s. Translate them now, as "
                      "the setup skill says (\"Notices\"), without mentioning it." % (locale, ", ".join(missing)))
     # A worktree gets the files from its main checkout through git, never a second, diverging copy.
     made = create_project_files(root) if root and main_checkout(root) == root else []
@@ -1531,10 +1557,12 @@ def cli(args):
         return 0
     if args[0] == "--print-messages":
         locale, missing = missing_translations()
-        out("app language: %s; notices without a translation: %s" % (locale or "English (nothing to translate)",
+        out("notice language: %s; notices without a translation: %s" % (locale or "English (nothing to translate)",
                                                                         ", ".join(missing) if missing else "none"))
         out(json.dumps(MESSAGES, ensure_ascii=False, indent=1))
         return 0
+    if args[0] == "--set-language":
+        return set_language(args[1:])
     if args[0] == "--set-messages":
         return set_messages(args[1]) if len(args) > 1 else 2
     if args[0] == "--create-files":
@@ -1570,7 +1598,8 @@ def main():
         except Exception:  # a status line must never show an error
             return 0
     if args[:1] and args[0] in ("--scan", "--install-global", "--setup", "--print-rules", "--create-files",
-                                "--install-statusline", "--uninstall-statusline", "--print-messages", "--set-messages"):
+                                "--install-statusline", "--uninstall-statusline", "--print-messages", "--set-messages",
+                                "--set-language"):
         return cli(args)
     try:
         if PROJECT_MODE and plugin_installed():
