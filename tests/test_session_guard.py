@@ -431,7 +431,7 @@ class Guard(unittest.TestCase):
         self.assertIn("Reply style", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
         self.assertTrue(os.path.exists(os.path.join(repo, "docs", "STATUS.md")))
 
-    def test_cloud_installing_session_is_restart_locked(self):
+    def test_cloud_installing_session_goes_on(self):
         repo = self.project("repo", {"CLAUDE.md": "reviewed rules"})
         subprocess.run([sys.executable, "-I", SETUP, "--reviewed", repo], capture_output=True, env=self.env, check=True)
         self.assertTrue(os.path.exists(os.path.join(repo, "docs", "STATUS.md")))
@@ -439,8 +439,9 @@ class Guard(unittest.TestCase):
         cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
         data = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "old", "prompt": "next"}).encode()
         copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
-        r = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
-        self.assertIn("Open a new session", json.loads(r.stdout)["reason"])
+        r = json.loads(subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud).stdout)
+        self.assertNotIn("decision", r)  # the installing session goes on, with the rules
+        self.assertIn("Reply style", r["hookSpecificOutput"]["additionalContext"])
 
     def test_cloud_setup_is_idempotent_and_quiet_with_plugin(self):
         repo = self.project("repo", {".claude/settings.json": json.dumps({"permissions": {"allow": ["Bash(ls)"]}})})

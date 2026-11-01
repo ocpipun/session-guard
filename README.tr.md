@@ -108,7 +108,7 @@ Bulut oturumları eklenti kurmaz. Session Guard her depoya bir kez, o deponun bi
 Install Session Guard: git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard, then follow /tmp/session-guard/CLOUD.md
 ```
 
-Claude deponun inceleme listesini gösterir, "Which language would you like session-guard notices in?" diye sorar (bulut uygulama dilini okuyamaz) ve tek onay sorusu sorar. Reddederseniz hiçbir şey kurulmaz. Onaylarsanız Claude Session Guard'ı deponun `.claude/` klasörüne kurar, eksik proje dosyalarını oluşturur, oturumdaki işi devredilebilir hâle getirir, devir notunu yazar ve hepsini doğrudan deponun ana dalına commit eder. Kurulumu yapan oturum sonra kilitlenir. Son adım: o depoda **yeni bir oturum açın**; hiçbir şey sormaz. Depo başına bir kez yeter. Bulutta genel CLAUDE.md olmadığı için depo kopyası genel kuralları kendisi getirir. Eklentinin kurulu olduğu bir bilgisayarda depo kopyası sessiz kalır; koruma iki kez çalışmaz. **Bulutta kota koruması yoktur.**
+Claude deponun inceleme listesini gösterir, "Which language would you like session-guard notices in?" diye sorar (bulut uygulama dilini okuyamaz) ve tek onay sorusu sorar. Reddederseniz hiçbir şey kurulmaz. Onaylarsanız Claude Session Guard'ı deponun `.claude/` klasörüne kurar, eksik proje dosyalarını oluşturur ve hepsini doğrudan deponun ana dalına commit eder. Aynı oturumda devam edersiniz: Session Guard orada bir sonraki mesajınızdan itibaren, o deponun her yeni oturumunda da çalışır. Depo başına bir kez yeter. Bulutta genel CLAUDE.md olmadığı için depo kopyası genel kuralları kendisi getirir. Eklentinin kurulu olduğu bir bilgisayarda depo kopyası sessiz kalır; koruma iki kez çalışmaz. **Bulutta kota koruması yoktur.**
 
 ## Kaldırma
 

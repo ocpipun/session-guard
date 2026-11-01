@@ -1244,9 +1244,13 @@ def on_prompt(inp):
     sid = inp.get("session_id")
     mark = started(sid)
     if mark is None and act == "active":
-        # Started before the install: locked once the setup is approved, until the app restarts (cloud: a new
-        # session). While setup is pending it runs here, so the user's answers must get through.
-        return emit({"decision": "block", "reason": msg("restart_project" if PROJECT_MODE else "restart_plugin")})
+        # Started before the install. Computer: locked until the app restarts (while setup is pending it runs here,
+        # so the user's answers get through). Cloud: the hooks reached this session mid-way, so it simply gets the
+        # rules with this prompt and goes on; no second session.
+        if not PROJECT_MODE:
+            return emit({"decision": "block", "reason": msg("restart_plugin")})
+        mark_started(sid, False)
+        mark = started(sid)
     if mark is not None:
         os.utime(os.path.join(STATE_DIR, "started", safe_name(sid)))  # in use: kept by the 30-day cleanup
     context, last, ids, pending, stale, _, _ = read_transcript(inp.get("transcript_path"))
