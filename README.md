@@ -1,152 +1,190 @@
 # Session Guard
 
-**A Claude Code plugin that measures how big your session has grown, how long you were away and how much quota is left, hands work off cleanly before the session gets expensive, and locks finished sessions so nothing you type later can mix things up.**
+**Version 1.2** · Open source, released under the **MIT license** · [Türkçe](README.tr.md)
 
-[Türkçe](README.tr.md) · Version 1.2
+Session Guard is a plugin for Claude Code. It measures three things Claude cannot see by itself: how big the session has grown, how long you were away, and how much of your quota is left. Based on these measurements it tells Claude when to hand work off, when to stop, and it locks finished sessions so nothing typed later can mix things up.
 
 ---
 
-## Why
+## 1. Why it was written
 
-A Claude Code session gets more expensive with every message: each new prompt re-sends the whole conversation (the *context*). Past a few hundred thousand tokens, one prompt can cost as much as a whole short session. Three things make this worse:
+Every message in a Claude Code session re-sends the whole conversation so far (the *context*). The longer the session, the more each message costs. Past a few hundred thousand tokens, one message can cost as much as a whole short session.
 
-1. **Claude cannot see its own context size.** The app shows it to you, but the model never receives that number, so it cannot warn you or stop on its own. Rules like "hand off at 300k" in a `CLAUDE.md` file are guesses at best.
-2. **Long breaks are expensive.** The prompt cache expires (one hour on a subscription). The first prompt after a long break re-processes the whole context at full price.
-3. **The quota runs out mid-step.** When the 5-hour or weekly limit is hit, work stops wherever it is.
+Four problems make this worse:
 
-There is also a quieter problem: after you have written a hand-off note and moved to a new session, typing into the old one again creates two diverging versions of the same work.
+1. **Claude cannot see its own context size.** The app shows the number to you, but the model never receives it. A rule like "hand off at 300k" in a `CLAUDE.md` file is only a guess for Claude.
+2. **Long breaks are expensive.** The prompt cache expires after about an hour. The first message after a long break processes the whole context again at full price.
+3. **The quota runs out in the middle of a step.** When the 5-hour or weekly limit is reached, work stops wherever it is.
+4. **Old sessions get mixed up with new ones.** After a hand-off note is written and work moves to a new session, typing into the old session again creates two different versions of the same work.
 
-Session Guard fixes all of this with measurements instead of guesses.
+Session Guard solves these with measurements, not guesses.
 
-## What it does
+## 2. What it does
+
+### Context thresholds
 
 | Situation | Normal mode | Long mode |
 |---|---|---|
 | 250k tokens | Notice | Notice |
-| 300k | **Hand-off**: STATUS.md is cleaned up, finished items go to the archive, a hand-off note is written. After that: no new tasks, only questions | Notice only |
+| 300k | **Hand-off:** STATUS.md is tidied, finished items move to the archive, a hand-off note is written. From then on: no new tasks, only questions | Notice only |
 | 350k | Target stop: open a new session | — |
-| 400k | **Hard stop**, session locked | — |
-| 700k | — | Notice; work is made hand-off ready (Claude may keep working) |
+| 400k | **Hard stop**, the session is locked | — |
+| 700k | — | Notice; work is made ready to hand off (Claude may keep working) |
 | 800k | — | No new work; only simple questions; final hand-off note |
-| 900k | — | **Hard stop**, session locked |
-| Break over 1 hour, context > 100k | Your prompt is **not** run. Claude writes the hand-off note, copies your prompt into it word for word, and the session locks | Break rule off |
-| Break over 1 hour, context ≤ 100k | One-line reminder, then your prompt runs | Break rule off |
-| Quota 90% (5-hour) or 98% (weekly) | No new task; current work made hand-over ready within 15 minutes; locked until the reset | same |
-| `finish session` | Hand-off + usage measurement, then the session locks | same |
+| 900k | — | **Hard stop**, the session is locked |
 
-- **Thresholds only on Session Guard's word.** Claude never acts on a threshold early: no early notice, no early hand-off, no "open a new session" because it expects the next task to be big. Session Guard checks after every tool call while Claude works and stops at 400k, so the plan above always holds. Each threshold reaches you in one fixed form, for example: "250k threshold passed: notice only. *This is a Session Guard notice."
-- **The break rule only counts *your* absence.** If Claude started a background job (a render, a long script, a subagent) and is waiting for it, the gap is not a break.
-- **A locked session never passes a prompt to Claude.** The prompt is blocked before it is sent, so it costs nothing and changes nothing. Locks are kept apart by kind: context limit, finish session, break, quota (lifts at the reset) and restart (a session that started before the install).
-- **Reopened conversations stay locked.** The desktop app can reopen an old conversation under a new session id. Session Guard recognises it by its message ids, so the lock (and long mode) survive.
-- **Session start:** Claude gets the rules and your `docs/STATUS.md` automatically. You never type "read STATUS.md" again; the archive (`docs/STATUS_ARCHIVE.md`) is only searched when needed.
-- **Reply style that saves tokens:** plain words, short sentences, each issue numbered, with only the labels it needs: PROBLEM / RECOMMENDATION / ASSUMPTION / WARNING / UNVERIFIED (in your language). If you want more detail, ask.
-- **Facts stay facts.** Claude never presents something it has not researched or is not sure of as fact (it is labelled UNVERIFIED), and marks its own recommendations and assumptions as its own.
-- **Project files.** Every project gets `CLAUDE.md`, `docs/STATUS.md` and `docs/STATUS_ARCHIVE.md`. Files that already exist are never overwritten. Files that do the same job under another name (AGENTS.md, GEMINI.md, .cursorrules, HANDOFF*, NOTES*, TODO*, PROGRESS*, status files and the like) are reviewed with your approval: conflicting lines go, useful content moves into STATUS / ARCHIVE. Nothing is created in your home folder, a drive root or system folders, and a git worktree uses its main checkout's files.
-- **One rule set.** Session Guard's general rules live in a marked block of your global `~/.claude/CLAUDE.md`. Rules, skills, scripts and hooks that conflict with them are removed during setup, with your approval.
-- **Notices in your language.** Claude talks to you in your language. The notices the app shows directly (locks, blocked messages, thresholds) come in the language selected in the Claude desktop app's settings at setup time (read once; Turkish ships with the plugin, other languages are translated by Claude during setup). Where it cannot be read, Claude asks: "Which language would you like session-guard notices in?" It is never checked again; for another language later, ask Claude to add it. In the terminal they are English.
+- Claude acts on a threshold **only when Session Guard says so**. No early warnings, no early hand-off, no "open a new session" because the next task looks big. Session Guard checks after every tool call and stops at 400k, so the plan always holds.
+- Every threshold reaches you in one fixed form, for example: "250k threshold passed: notice only. *This is a Session Guard notice."
 
-## Quota protection (Session Follow, computer only)
+### Breaks
 
-- **Terminal:** read from Session Guard's status line, at zero token cost (only if you have no other status line).
-- **Desktop app:** status lines do not run there, so Claude reads the app's usage tool when the last reading is older than 20 minutes (with every prompt from 85% 5-hour or 95% weekly; during long work at most every 5 minutes). About 400 tokens per reading (estimate).
-- **At 90% (5-hour) or 98% (weekly)**, when the reset is at least 45 minutes away: Claude starts no new task, brings the current work to a hand-over-ready state within 15 minutes and writes one line into STATUS.md ("stopped at ..."). Then the session locks until the reset. Sessions started meanwhile are locked at once. A reset closer than 45 minutes: work goes on.
-- **After the reset** the lock clears by itself. If you were away for over an hour in normal mode, the break rule applies as usual.
-- One reading serves every session on the computer (the quota belongs to the account).
-- **Not in the cloud:** no hook can read the quota in a cloud session (checked against the documentation and tested). Cloud sessions keep every other rule.
+| Situation | Normal mode | Long mode |
+|---|---|---|
+| Away over 1 hour, context above 100k | Your message is **not** run. Claude writes the hand-off note, copies your message into it word for word, and the session locks | Break rule off |
+| Away over 1 hour, context 100k or less | One-line reminder, then your message runs | Break rule off |
 
-## Commands
+Only *your* absence counts. If Claude is waiting for its own background job (a render, a long script, a subagent), that time is not a break.
 
-Type them at the **end** of a message, or at the **start** followed by a comma or period. Anywhere else (inside a sentence, a quote, pasted text) they are ignored on purpose.
+### Quota protection (Session Follow, on a computer)
 
-| Command | Effect |
-|---|---|
-| `start long mode` | Long mode for this session only. It cannot be switched off; a new session starts in normal mode. Use it for long, complex or unattended work. |
-| `finish session` | Ends the topic: hand-off note + usage measurement, then the session locks. Use it whenever one topic is done, so one session never mixes several topics. |
+- Session Guard follows the **5-hour** and **weekly (all models)** quota.
+- **Desktop app:** Claude reads the app's usage tool when the last reading is older than 20 minutes (from 85% 5-hour or 95% weekly, with every message; during long work at most every 5 minutes). About 400 tokens per reading (an estimate).
+- **Terminal:** the numbers come from Session Guard's status line, at no token cost (only if you have no other status line).
+- **At 90% (5-hour) or 98% (weekly)**, when the reset is at least 45 minutes away: Claude starts no new task, makes the current work ready to hand off within 15 minutes and writes one line into STATUS.md. Then the session locks until the reset. Sessions opened in the meantime are locked at once. If the reset is closer than 45 minutes, work goes on.
+- After the reset the lock lifts by itself.
 
-Examples: `Start long mode, render the remaining clips` · `That's all for today, finish session`
+### Locked sessions
 
-## How it works
+- A locked session never passes a message to Claude. The message is stopped before it is sent, so it costs nothing and changes nothing.
+- Lock types are kept apart: context limit, finish session, break, quota (lifts at the reset), restart (a session that started before the install, on a computer).
+- When the desktop app reopens an old conversation under a new id, Session Guard recognises it, so the lock (and long mode) stay.
 
-Session Guard is a Claude Code **plugin**: a package of hooks, a script, skills and translations.
+### Other things it does
 
-- **Hooks** run the script automatically on three events: session start, every prompt you submit, and after every tool Claude uses. A fourth, background hook is the 24-hour watch.
-- **The script** (`scripts/session_guard.py`, Python, standard library only) reads the session transcript that Claude Code already keeps on your disk (`~/.claude/projects/...`). The context size is taken from the token usage of Claude's last reply; the break is the time since that reply. It then:
-  - at a threshold (or a break, long mode, finish session, quota stop) adds an instruction with the measured numbers to Claude's context; a normal prompt gets nothing, so it costs no tokens,
-  - shows you a short notice when a threshold is first passed,
-  - blocks prompts in a locked session,
-  - stops Claude's turn if a hard limit is reached in the middle of work.
-- **Skills** hold the procedures (setup and project review, hand-off, break hand-off, finish session). Claude loads them only when needed.
-- **State** is Session Guard's own small record in `~/.claude/session_guard/`: per session long mode, locks and announced thresholds; the shared quota readings (`session_follow/`); the setup record, notice language and your own translations (`config/`). No project file or conversation is ever in it. Session records unused for 30 days are deleted; a locked session's record is kept, so an old session stays locked even when reopened months later.
+- **At session start** Claude gets the rules and your `docs/STATUS.md` by itself. You never type "read STATUS.md" again.
+- **Project files:** every project gets `CLAUDE.md` (permanent facts and decisions), `docs/STATUS.md` (current state, one screen) and `docs/STATUS_ARCHIVE.md` (history). Existing files are never overwritten.
+- **Files doing the same job under another name** (AGENTS.md, GEMINI.md, .cursorrules, HANDOFF*, NOTES*, TODO*, PROGRESS*, status files and similar) are reviewed with your approval: conflicting lines are removed, useful content moves into STATUS or the archive.
+- **One rule set:** rules, skills, scripts and hooks that conflict with Session Guard are removed during setup, with your approval.
+- **Reply style that saves tokens:** plain words, short sentences, each issue numbered, only the labels needed: PROBLEM / RECOMMENDATION / ASSUMPTION / WARNING / UNVERIFIED (in your language).
+- **Facts stay facts:** what Claude has not checked is labelled UNVERIFIED; its own recommendations and assumptions are labelled as its own.
+- **Notices in your language:** the notices the app shows directly (locks, blocked messages, thresholds) come in the language chosen at setup. Details in section 5.
 
-Nothing is sent anywhere. The script only reads local files and writes its own files.
+## 3. Where it can be used
 
-## One home per project: computer or cloud (strict rule)
+| Place | Works | Notes |
+|---|---|---|
+| Claude desktop app (computer) | Yes | Full feature set, including quota protection. Tested on Windows. |
+| Claude Code in a terminal (computer) | Yes | Quota from the status line. Notices in English. |
+| Phone or browser connected to a computer session (Remote Control) | Yes | The session runs on the computer, so the computer rules apply. |
+| Cloud sessions (claude.ai/code, also from phone or browser) | Yes, per repository | No quota protection. Installed into the repository. |
+| macOS and Linux desktop app | Expected | Built for them, **not tested**. |
 
-A project is worked on **either on the computer or in the cloud, never both**, and never at the same time. Quota protection works only on the computer, and two places writing one STATUS.md drift apart.
+**One home per project (strict rule).** A project is worked on **either on the computer or in the cloud, never both**, and never at the same time. Quota protection works only on the computer, and two places writing one STATUS.md drift apart.
+- A computer project that is a git repository gets a one-line hook in its `.claude/settings.json`. On the computer it does nothing; in a cloud session of that repository it stops every message before it reaches Claude.
+- A cloud project carries Session Guard's cloud copy in `.claude/session-guard/`. Opened on a computer, every message is stopped.
+- On a computer no GitHub repository is needed: Session Guard lives in `~/.claude` and puts only the three project files into a project. The cloud always needs a repository.
 
-- A computer project that is a git repository gets a one-line hook in its `.claude/settings.json` (committed with it). On the computer it does nothing; in a cloud session of that repository it blocks every prompt before it reaches Claude.
-- A cloud project carries Session Guard's cloud copy (`.claude/session-guard/`). Opened on a computer, every prompt is blocked.
-- Nothing else is shared: the computer part of Session Guard lives in `~/.claude` and never goes into a repository. Use the plugin on a computer without any GitHub repository; the cloud needs one.
+## 4. Install
 
-## Install (computer)
+### On a computer
 
-**Strict rule: install and updates run only in a Claude project folder named `session-guard-executive`.** Without this folder Session Guard does not work in computer sessions. Create the folder anywhere, open it in Claude, and use it later to check and install updates (paste the same line again).
+Requirements: Claude Code (desktop app or terminal) and Python 3 (`python` on Windows, `python3` on macOS/Linux). On Windows, Claude Code should use Git Bash for hooks (the default when Git for Windows is installed).
 
-Requirements: Claude Code (desktop app or terminal), Python 3 (`python` on Windows, `python3` on macOS/Linux). On Windows, Claude Code should use Git Bash for hooks (the default when Git for Windows is installed).
+**Strict rule: install and updates run only in a Claude project folder named `session-guard-executive`.** Without this folder Session Guard does not work in computer sessions.
 
-In a session of `session-guard-executive`, paste this one line:
+1. Create a folder named `session-guard-executive` anywhere and open it in Claude.
+2. In a session there, paste this one line:
 
-```
-Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard", then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
-```
+   ```
+   Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard", then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
+   ```
 
-What happens, all in that one session:
+3. Claude downloads Session Guard and scans your global `~/.claude` folder and every project Claude Code knows. It shows **one list**: conflicting rules, skills, scripts and hooks, files doing the project files' job under another name, and leftovers of an older Session Guard. The same message says what else setup does: the general rules block in `~/.claude/CLAUDE.md`, the missing project files, the status line in `~/.claude/settings.json` and the computer guard in git projects. If the app language cannot be read, it also asks: "Which language would you like session-guard notices in?"
+4. You answer **once**. Approved items are deleted for good (no backup copies). **If you decline, nothing is installed.**
+5. Claude installs the plugin (an older version is simply updated; nothing has to be removed by hand).
+6. Last step: **fully quit Claude** (in the desktop app also from the system tray) **and reopen it.** Until then, open sessions run as before. After reopening you type nothing and are asked nothing; you can go on in the same conversations.
 
-1. Claude downloads Session Guard. An older version needs no removal: it is updated at the end.
-2. It scans your global `~/.claude` (CLAUDE.md, memory files, skills, commands, agents, scripts, output styles, rules, hooks) and every project Claude Code has sessions for, and shows **one list**: rules that conflict with Session Guard or repeat it, skills, scripts or hooks that do the same job, and files that do the project files' job under another name. Project facts and a project's own STATUS layout are not conflicts.
-3. The same message says what else setup does: the general rules block in `~/.claude/CLAUDE.md` (your other rules stay), the missing project files, and the status line in `~/.claude/settings.json` (terminal quota readings; another status line you already have is left alone; the code is public here, MIT). If the app language cannot be read, the language question is in it too.
-4. You answer **once**. The approved items are deleted for good (no backup copies, so nothing half-moved is left behind). **If you do not approve, Session Guard stays off;** `/session-guard:setup` runs it again any time.
-5. Claude installs (or updates) the plugin. Last step: **fully quit Claude** (in the desktop app also from the system tray) **and reopen it.** Until then, open sessions run as before. After reopening you type nothing and are asked nothing.
+It then works in every project on that computer. A project opened later that has its own CLAUDE.md, similar files, skills or hooks gets the same review once, for that project only; it starts by itself.
 
-Installed at user scope, it works in every project on that machine. A project opened later that has its own CLAUDE.md, similar files, skills or hooks gets the same review once, for that project only (it starts by itself); declining turns Session Guard off in that project only. When an update changes the rules, the setup runs again.
+### In the cloud
 
-## Cloud sessions (claude.ai/code)
-
-Cloud sessions do not install plugins. Session Guard is installed into each repository once, from a cloud session of that repository, with this one line:
+Cloud sessions do not install plugins. Session Guard is installed into each repository once, from a cloud session of that repository:
 
 ```
 Install Session Guard: git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard, then follow /tmp/session-guard/CLOUD.md
 ```
 
-Claude shows the repository's review list and asks "Which language would you like session-guard notices in?" (the cloud cannot read the app language) and one approval question. If you decline, nothing is installed. If you approve, Claude installs Session Guard into the repository's `.claude/` folder, creates the missing project files and commits everything straight to the repository's main branch. You go on in the same session: Session Guard runs there from your next message, and in every new session of that repository. Once per repository is enough. The cloud has no global CLAUDE.md, so the repository copy brings the general rules itself. On a computer where the plugin is installed, the repository copy stays quiet, so the guard never runs twice. **No quota protection in the cloud.**
+Claude shows the repository's review list, asks "Which language would you like session-guard notices in?" and one approval question. If you decline, nothing is installed. If you approve, Claude installs Session Guard into `.claude/`, creates the missing project files and commits everything straight to the repository's main branch. **You go on in the same session:** Session Guard runs there from your next message, and in every new session of that repository. Sessions that were already open stay unprotected. A computer project is refused (one home per project).
 
-## Uninstall
+## 5. Commands and everyday use
 
-Ask Claude to uninstall Session Guard. It removes its status line (`session_guard.py --uninstall-statusline`), then runs:
+### Commands you type
+
+Type them at the **end** of a message, or at the **start** followed by a comma or period. Anywhere else (inside a sentence, a quote, pasted text) they are ignored on purpose.
+
+| Command | What it does |
+|---|---|
+| `start long mode` | Long mode for this session only. It cannot be switched off; a new session starts in normal mode. For long, complex or unattended work. |
+| `finish session` | Ends the topic: hand-off note and usage measurement, then the session locks. Use it whenever a topic is done, so one session never mixes several topics. |
+
+Examples: `Start long mode, render the remaining clips` · `That's all for today, finish session`
+
+### Things you ask Claude
+
+| You want to | Do this |
+|---|---|
+| Update Session Guard (computer) | In `session-guard-executive`, paste the install line again |
+| Update Session Guard (cloud) | Paste the cloud install line again in a cloud session of that repository |
+| Run the setup or review again | Type `/session-guard:setup` |
+| Notices in another language | Ask Claude, for example "Session Guard notices in French". Claude translates them; until then they are English |
+| Uninstall | Ask Claude to uninstall Session Guard (details below) |
+
+### Notice language
+
+- On a computer the language selected in the Claude desktop app's settings is read **once, at setup**, and never checked again. Turkish comes with the plugin; other languages are translated by Claude during setup.
+- In the cloud the app language cannot be read, so Claude asks during setup.
+- In the terminal notices are English.
+- Three notices are always English, because they can appear before or outside setup: the missing `session-guard-executive` folder, a cloud project opened on a computer, and a computer project opened in the cloud.
+
+### Uninstall
+
+Ask Claude to uninstall Session Guard. It removes its status line (`session_guard.py --uninstall-statusline`) and runs:
 
 ```bash
 claude plugin uninstall session-guard@session-guard
 ```
 
-Then remove the block between `<!-- session-guard:begin` and `<!-- session-guard:end -->` from `~/.claude/CLAUDE.md`. For a repository set up for the cloud, ask Claude to remove `.claude/session-guard/`, `.claude/skills/session-guard/`, `.claude/skills/session-guard-setup/` and the Session Guard hooks from `.claude/settings.json`.
+Then remove the block between `<!-- session-guard:begin` and `<!-- session-guard:end -->` from `~/.claude/CLAUDE.md`. In a repository set up for the cloud, ask Claude to remove `.claude/session-guard/`, `.claude/skills/session-guard/`, `.claude/skills/session-guard-setup/` and the Session Guard hooks from `.claude/settings.json`.
 
-## Limits and honest notes
+## 6. How it works
 
-- The context number is the size of the *last reply*, so it can lag one step behind. Thresholds are checked again after every tool call while Claude works.
-- A background job or subagent whose "finished" notice never arrives counts as running for at most 24 hours. After that, and when Claude has worked on one message for over 24 hours, Session Guard tells you it may be a bug and suggests `finish session` if it is stuck. A 24-hour timer starts with every prompt (a local check, not a Claude request, so it uses no quota); if 24 hours pass with no new prompt and the session is still busy, it wakes Claude, which tells you. In the cloud the timer dies if the cloud stops an inactive session first.
-- The app language is read from the desktop app's own settings file (`config.json`, key `locale`). This file is not documented: on Windows it was measured, on macOS (`~/Library/Application Support/Claude/`) and Linux (`~/.config/Claude/`) it comes from the app's code and is not tested. If it is not found, Claude asks.
-- Quota readings in the desktop app cost tokens (about 400 each, estimate); the terminal status line costs none.
-- "Every project" means every project Claude Code has a session for (found from `~/.claude/projects`). Folders never opened in Claude Code are reviewed when first opened.
-- Whether an item conflicts is decided by Claude and approved by you; the script only finds the candidates.
-- Thresholds are fixed in the script (`NORMAL_STEPS`, `LONG_STEPS`, `STOP_AT`). They are working values, not proven quota savings.
-- The v1.2 install flows have not yet been tested in a live install (computer or cloud).
+- **Hooks** run Session Guard's script by themselves: at session start, on every message you send and after every tool Claude uses. A fourth hook in the background is the 24-hour watch.
+- **The script** (`scripts/session_guard.py`, Python standard library only) reads the session record Claude Code already keeps on your disk. The context size comes from the token usage of Claude's last reply; the break is the time since that reply. At a threshold it adds an instruction with the measured numbers; a normal message gets nothing, so it costs no tokens.
+- **Skills** hold the procedures (setup and review, hand-off, break hand-off, finish session). Claude loads them only when needed.
+- **State** is Session Guard's own small record in `~/.claude/session_guard/`: long mode, locks and notices per session; the shared quota readings; the setup record, notice language and your own translations. No project file or conversation is ever kept there.
 
-## Tests
+**Nothing is sent anywhere.** The script only reads local files and writes its own files.
+
+## 7. Limitations
+
+- The context number is the size of the *last reply*, so it can be one step behind. Thresholds are checked again after every tool call.
+- **No quota protection in the cloud:** no hook can read the quota there (checked against the documentation and tested).
+- In the desktop app each quota reading costs tokens (about 400, an estimate); the terminal status line costs none.
+- The app language comes from the desktop app's own settings file (`config.json`, key `locale`). This file is not documented. It was measured on Windows; on macOS (`~/Library/Application Support/Claude/`) and Linux (`~/.config/Claude/`) it comes from the app's code and is **not tested**. If it is not found, Claude asks.
+- On a computer, sessions that started before the install are protected only after the app is restarted.
+- A project lives on the computer or in the cloud, not both (see section 3).
+- A background job whose "finished" notice never arrives counts as running for at most 24 hours. After that, or when Claude works on one message for over 24 hours, Session Guard says it may be a bug. The 24-hour timer is a local check and uses no quota. In the cloud it stops if the cloud ends an idle session first.
+- "Every project" means every project Claude Code has a session for. Folders never opened in Claude Code are reviewed when first opened.
+- Whether something conflicts is decided by Claude and approved by you; the script only finds the candidates.
+- The thresholds are fixed in the script (`NORMAL_STEPS`, `LONG_STEPS`, `STOP_AT`). They are working values, not proven quota savings.
+- The desktop install of v1.2 has not yet been tested in a live install; the cloud install and update were tested.
+
+## 8. Tests
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-## License
+## 9. License: open source, MIT
 
-MIT
+Session Guard is **open source** and released under the **MIT license** (see [LICENSE](LICENSE)). You may use, copy, change and share it freely, also commercially. It comes **as is, without any warranty**. If something does not fit your setup (another language, another operating system, other thresholds), you are free to change it yourself.
