@@ -71,9 +71,10 @@ session-start message "notices without a translation" (after an update) means: t
 5. Yes: `SG --create-files "<project>"` for each project that gets moved content, then delete, rewrite or move
    exactly the approved items, nothing else (no backup copies). `SG --install-global` (if it reports damaged
    markers, remove the broken `session-guard` marker lines by hand and run it again), `SG --install-statusline`
-   (not with `--project`), "Notices", `SG --setup approved --all`. Tell the user what was deleted, moved or changed, and that
-   Session Guard is on from now on in every session (no restart needed). The rules arrive with the next message.
-   Then handle the user's original message, if it is still open.
+   (not with `--project`), "Notices", `SG --setup approved --all`. Tell the user what was deleted, moved or changed. Run from
+   INSTALL.md (the installing session): its restart message is the last step, and sessions that started before
+   the install are locked until then. Run from a "SETUP PENDING" message after a restart: Session Guard is on at
+   once and the rules arrive with the next message; then handle the user's original message, if still open.
 6. No: change nothing; `SG --setup declined`. Tell the user Session Guard stays off and `/session-guard:setup`
    runs this again.
 

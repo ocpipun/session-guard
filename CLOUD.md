@@ -2,33 +2,40 @@
 
 Instructions for Claude, when the user asks in a cloud session (claude.ai/code) to install Session Guard from
 https://github.com/ocpipun/session-guard into the current repository. No local computer or plugin is needed.
-Every change goes into the repository. The user's one command is the approval for the install: do every step
-below in this one turn, without questions. Once the hooks are copied, Claude Code may load them into this
-session; from then on this session's prompts are blocked ("open a new session"), so a question would never get
-its answer here.
+Every change goes into the repository. Opening a new session is the last step: that session asks nothing.
 
 1. Download, if `/tmp/session-guard` is not there yet: `git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard`.
    If the network blocks GitHub, tell the user the environment's network access must allow github.com, and stop.
-2. `REPO` = the repository root. Write the hand-off note now, before the copy (format: "Hand-off" in
-   `/tmp/session-guard/plugins/session-guard/skills/session-guard/SKILL.md`, in the user's language): what this
-   session was doing, if anything, and as the next step "Session Guard project review (starts by itself)".
-   `docs/STATUS.md` missing: create it with only that section. Present: replace only its hand-off section
-   ("## Hand-off note" or the same heading in the user's language), leave the rest as it is.
-3. Install: `python3 /tmp/session-guard/plugins/session-guard/scripts/cloud_setup.py "$REPO"`. It copies the script,
-   hooks and skills into `.claude/` (existing settings are kept). The project review, CLAUDE.md and the other
-   project files come in the next session.
-4. Commit only the install and docs/STATUS.md, as one commit ("Install Session Guard"), and put it on the
-   repository's default branch (every new cloud session starts from it):
-   - Default branch: `git remote show origin | sed -n 's/.*HEAD branch: //p'` (call it `MAIN`); `git fetch origin "$MAIN"`.
-   - If the commit sits directly on `origin/$MAIN` (`git rev-parse HEAD~1` equals `git rev-parse origin/$MAIN`):
-     `git push origin HEAD:"$MAIN"`. Otherwise (the session branch has other work, or `MAIN` moved):
-     `git checkout -b sg-install origin/"$MAIN"`, `git cherry-pick <install commit>`,
-     `git push origin sg-install:"$MAIN"`, then go back to the session branch.
-   - If GitHub rejects the push (branch protection), push the session branch and tell the user to open the pull
-     request with "Create PR" and merge it; until it is merged, new sessions do not have Session Guard.
-5. Tell the user, in their language: Session Guard is installed for this repository. Open a new session of this
-   repository: there Session Guard starts its project review by itself (rules that conflict with it, similar
-   files, the project files) and stays off until the user approves. This session and other sessions that were
-   already open stay unprotected. There is no quota protection in the cloud (no hook can read the quota there).
+2. `SG` = `python3 /tmp/session-guard/plugins/session-guard/scripts/session_guard.py --project`, `REPO` = the
+   repository root. Copy nothing yet.
+3. Project review: follow "What counts as a conflict", "Similar files" and "Project review" in
+   `/tmp/session-guard/plugins/session-guard/skills/setup/SKILL.md` for `REPO` (`$SG --scan "$REPO"`, read, one
+   numbered list). In the same message, in English and word for word, ask:
+   "Which language would you like session-guard notices in?" Then one approval question.
+4. The user declines: change nothing, install nothing. Tell the user Session Guard is not installed, because it
+   only works where no conflicting rule is left. Stop here.
+5. The user approves: do all of the following in this one turn, without further questions (once the hooks are
+   copied, Claude Code may load them into this session, and from then on its prompts are blocked):
+   1. Make the approved changes.
+   2. `python3 /tmp/session-guard/plugins/session-guard/scripts/cloud_setup.py --reviewed "$REPO"`: copies the
+      script, hooks, skills and translations into `.claude/`, records the approval and creates the missing
+      CLAUDE.md, docs/STATUS.md and docs/STATUS_ARCHIVE.md.
+   3. Language: `cd "$REPO" && python3 .claude/session-guard/session_guard.py --project --set-language <code>`
+      (`english` for none). If it reports notices without a translation, translate them as the skill's "Notices"
+      says, with the same `--project` command and `--set-messages`.
+   4. Bring the current work of this session to a hand-over-ready state and write the hand-off note into
+      docs/STATUS.md ("Hand-off" in `/tmp/session-guard/plugins/session-guard/skills/session-guard/SKILL.md`, in
+      the user's language; replace only that section).
+   5. Commit all of it as one commit ("Install Session Guard") and put it on the repository's default branch
+      (every new cloud session starts from it):
+      - Default branch: `git remote show origin | sed -n 's/.*HEAD branch: //p'` (call it `MAIN`); `git fetch origin "$MAIN"`.
+      - If the commit sits directly on `origin/$MAIN` (`git rev-parse HEAD~1` equals `git rev-parse origin/$MAIN`):
+        `git push origin HEAD:"$MAIN"`. Otherwise: `git checkout -b sg-install origin/"$MAIN"`,
+        `git cherry-pick <install commit>`, `git push origin sg-install:"$MAIN"`, then go back to the session branch.
+      - If GitHub rejects the push (branch protection), push the session branch and tell the user to open the pull
+        request with "Create PR" and merge it; until it is merged, new sessions do not have Session Guard.
+6. Last message, in the user's language: Session Guard is installed for this repository and the hand-off note is
+   ready. Open a new session of this repository; nothing needs to be typed there. This session is now locked; other
+   sessions that were already open stay unprotected. There is no quota protection in the cloud.
 
 To update later: the same steps again.

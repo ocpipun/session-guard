@@ -13,7 +13,9 @@ The project copy runs with --project: on a machine where the plugin is
 installed it stays quiet, so the guard never runs twice. Safe to run again
 (updates files, adds no duplicate hooks).
 
-Usage: python cloud_setup.py [repo_dir]      (default: current directory; v1.1's --reviewed is ignored)
+Usage: python cloud_setup.py [--reviewed] [repo_dir]      (default: current directory)
+    --reviewed   the user approved the project review in this session: records it and creates the missing
+                 project files, so the next session asks nothing
 """
 import json
 import os
@@ -50,6 +52,7 @@ def folder_path(folder):
 
 def main():
     global REPO
+    reviewed = "--reviewed" in sys.argv[1:]
     args = [a for a in sys.argv[1:] if a != "--reviewed"]
     REPO = os.path.abspath(args[0] if args else os.getcwd())
     claude = os.path.join(REPO, ".claude")
@@ -61,6 +64,10 @@ def main():
         shutil.copyfile(os.path.join(PLUGIN, "messages", name), os.path.join(folder, name))
     copy_skill("session-guard", "session-guard")
     copy_skill("setup", "session-guard-setup")
+    made = []
+    if reviewed:  # the user approved the project review in this session (CLOUD.md)
+        sg.write_marker(REPO, "approved")
+        made = sg.create_project_files(REPO)
 
     path = os.path.join(claude, "settings.json")
     settings = {}
@@ -86,7 +93,9 @@ def main():
     print("Session Guard copied into %s" % REPO)
     print("  .claude/session-guard/ (script, setup.json), .claude/skills/session-guard/, .claude/skills/session-guard-setup/")
     print("  hooks added: %s" % (", ".join(added) if added else "none (already present)"))
-    print("Commit these files. In a new cloud session of this repository Session Guard starts with its project review.")
+    print("  review: %s; project files created: %s" % ("approved" if reviewed else "pending (runs in the next session)",
+                                                      ", ".join(made) if made else "none"))
+    print("Commit these files; new cloud sessions of this repository then run Session Guard.")
     return 0
 
 

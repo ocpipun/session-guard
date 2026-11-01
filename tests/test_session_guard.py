@@ -432,8 +432,9 @@ class Guard(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(repo, "docs", "STATUS.md")))
 
     def test_cloud_installing_session_is_restart_locked(self):
-        repo = self.project("repo")
-        subprocess.run([sys.executable, "-I", SETUP, repo], capture_output=True, env=self.env, check=True)
+        repo = self.project("repo", {"CLAUDE.md": "reviewed rules"})
+        subprocess.run([sys.executable, "-I", SETUP, "--reviewed", repo], capture_output=True, env=self.env, check=True)
+        self.assertTrue(os.path.exists(os.path.join(repo, "docs", "STATUS.md")))
         shutil.rmtree(os.path.join(self.home, ".claude"))
         cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
         data = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "old", "prompt": "next"}).encode()
@@ -493,10 +494,14 @@ class Guard(unittest.TestCase):
         self.assertIn("Reply style", self.context(r))  # it never got the rules: given once now
         self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "again"), {})
 
-    def test_restart_lock_even_before_setup(self):
+    def test_installing_session_runs_setup_then_locks(self):
         os.remove(os.path.join(self.home, ".claude", "session_guard", "config", "setup.json"))
-        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi", fresh=True)
-        self.assertEqual(r["decision"], "block")
+        t = self.transcript("t", 50_000)
+        r = self.run_hook("UserPromptSubmit", "s1", t, "yes, approve", fresh=True)
+        self.assertNotIn("decision", r)  # the user's answers to the setup get through
+        self.assertIn("SETUP PENDING", self.context(r))
+        self.cli("--setup", "approved")
+        self.assertIn("Fully quit Claude", self.run_hook("UserPromptSubmit", "s1", t, "next", fresh=True)["reason"])
 
     def test_resumed_session_with_rules_gets_nothing_again(self):
         self.run_hook("SessionStart", "s1")

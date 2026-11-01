@@ -1243,9 +1243,12 @@ def on_prompt(inp):
         return 0
     sid = inp.get("session_id")
     mark = started(sid)
-    if mark is None:
+    if mark is None and act == "active":
+        # Started before the install: locked once the setup is approved, until the app restarts (cloud: a new
+        # session). While setup is pending it runs here, so the user's answers must get through.
         return emit({"decision": "block", "reason": msg("restart_project" if PROJECT_MODE else "restart_plugin")})
-    os.utime(os.path.join(STATE_DIR, "started", safe_name(sid)))  # in use: kept by the 30-day cleanup
+    if mark is not None:
+        os.utime(os.path.join(STATE_DIR, "started", safe_name(sid)))  # in use: kept by the 30-day cleanup
     context, last, ids, pending, stale, _, _ = read_transcript(inp.get("transcript_path"))
     state = load_state(sid, ids)
     if closed(state):
@@ -1263,7 +1266,7 @@ def on_prompt(inp):
         return emit(inactive(act, root, "UserPromptSubmit"))
 
     head = []
-    if not mark.get("rules"):  # started while setup or review was pending, or before the install
+    if not mark.get("rules"):  # started while setup or review was pending
         head.append(start_context(root))
         mark_started(sid, True)
     prompt = normalize(inp.get("prompt") or "")
