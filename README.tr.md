@@ -46,7 +46,7 @@ Session Guard bu üçünü tahminle değil ölçümle çözer.
 
 Session Guard **5 saatlik** ve **haftalık (tüm modeller)** kotanızı izler; böylece oturum, kota bir adımın ortasında bitmeden önce düzgünce durur.
 
-- **Terminal:** Claude Code'un Session Guard'a verdiği durum çubuğundan okunur, token harcamaz.
+- **Terminal:** Session Guard'ın durum çubuğundan okunur, token harcamaz (başka bir durum çubuğunuz yoksa).
 - **Masaüstü uygulaması:** orada durum çubuğu çalışmaz; son okuma 20 dakikadan eskiyse Claude uygulamanın kullanım aracını okur (5 saatlik %85 ya da haftalık %95'ten sonra her mesajda; uzun işte en çok 5 dakikada bir). Okuma başına yaklaşık 400 token (tahmin).
 - **5 saatlikte %90 ya da haftalıkta %98'de**, sıfırlanmaya en az 45 dakika varsa: Claude yeni iş başlatmaz, mevcut işi 15 dakika içinde devredilebilir hâle getirir, STATUS.md'ye tek satır yazar ("şurada durdu ..."). Sonra oturum sıfırlanmaya kadar kilitlenir: "Quota 91% (5-hour), resets at 14:10. Continue after that." Bu arada açılan oturumlar hemen kilitlenir. Sıfırlanmaya 45 dakikadan az varsa iş sürer.
 - **Sıfırlanınca** kilit kendiliğinden kalkar. Normal modda 1 saatten uzun ara verdiyseniz mola kuralı her zamanki gibi uygulanır.
@@ -100,7 +100,7 @@ Kurulum onaylanana kadar Session Guard **hiçbir şey yapmaz**. Kurulum kendili�
 1. Genel `~/.claude` klasörünüzü (CLAUDE.md, hafıza dosyaları, skill'ler, komutlar, ajanlar, betikler, çıktı stilleri, kurallar, hook'lar) ve Claude Code'un oturumu olan her projeyi tarar.
 2. Session Guard'la çakışan her şeyi listeler: bağlam sınırı, devir, mola, oturum bitirme, STATUS dosyaları ya da yazım biçimi üzerine farklı bir şey söyleyen ya da Session Guard'ı tekrarlayan kurallar; aynı işi yapan skill, betik ya da hook'lar. Proje bilgileri ve projenin kendi STATUS düzeni çakışma sayılmaz.
 3. Proje dosyalarının işini başka adla yapan dosyaları da listeler (AGENTS.md, GEMINI.md, .cursorrules, .windsurfrules, .clinerules, copilot-instructions.md, HANDOFF*, NOTES*, TODO*, PROGRESS*, CONTEXT.md, MEMORY.md, status dosyaları): çakışan satırlar silinir, işe yarar içerik STATUS.md / STATUS_ARCHIVE.md'ye taşınır, eksik proje dosyaları oluşturulur.
-4. `~/.claude/settings.json`'a yazacağı durum çubuğunu açıklar (terminalde kota okuması, token harcamaz; mevcut durum çubuğunuz çalışmaya devam eder ve kaldırınca geri gelir; kod burada herkese açık, MIT).
+4. `~/.claude/settings.json`'a yazacağı durum çubuğunu açıklar (terminalde kota okuması, token harcamaz; başka bir durum çubuğunuz varsa ona dokunulmaz, terminalde kota okunmaz; kod burada herkese açık, MIT).
 5. Listeyi tek cevapla onaylarsınız (bir maddenin çakışma olmadığını söyleyebilirsiniz). Onaylanan maddeler kalıcı olarak silinir (yedek kopya yok, yarım taşınmış bir şey kalmasın diye) ve genel kurallar bloğu `~/.claude/CLAUDE.md`'ye yazılır (yoksa oluşturulur; diğer kurallarınız kalır). Session Guard açık bütün oturumlarda hemen devreye girer; ikinci yeniden başlatma gerekmez.
 6. **Onaylamazsanız Session Guard kapalı kalır.** `/session-guard:setup` ile istediğiniz zaman yeniden çalıştırın.
 
@@ -118,7 +118,7 @@ Bu satır onayınızdır: Claude tek seferde `docs/STATUS.md`'ye bir devir notu 
 
 ## Kaldırma
 
-Claude'dan Session Guard'ı kaldırmasını isteyin. Önce eski durum çubuğunuzu geri yükler (`session_guard.py --uninstall-statusline`), sonra şunu çalıştırır:
+Claude'dan Session Guard'ı kaldırmasını isteyin. Önce kendi durum çubuğunu kaldırır (`session_guard.py --uninstall-statusline`), sonra şunu çalıştırır:
 
 ```bash
 claude plugin uninstall session-guard@session-guard

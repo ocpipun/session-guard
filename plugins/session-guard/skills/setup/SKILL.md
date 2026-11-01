@@ -47,8 +47,8 @@ unless the user wants it gone.
    - on a computer (not in a repository copy): Session Guard writes a status line command into
      `~/.claude/settings.json` (key `statusLine`). Why: in the terminal it gives Session Guard the 5-hour and weekly
      quota at zero token cost, so a session can stop before the quota runs out (the desktop app does not run status
-     lines; there Claude reads the usage tool). An existing status line keeps working: Session Guard runs it and
-     shows its output unchanged, and uninstalling restores it. The code is public on GitHub
+     lines; there Claude reads the usage tool). If another status line is already set, it is left alone and the
+     terminal gives no quota readings. The code is public on GitHub
      (https://github.com/ocpipun/session-guard), MIT license;
    - approved items are deleted for good, with no backup (the user's decision); without approval Session Guard
      stays off.
@@ -71,5 +71,5 @@ In a repository copy (`--project`, cloud): commit the changes, the project files
 with the session's work, or the next cloud session asks again.
 
 ## Uninstall (on request)
-`SG --uninstall-statusline` (restores a wrapped status line), then `claude plugin uninstall session-guard@session-guard`;
+`SG --uninstall-statusline`, then `claude plugin uninstall session-guard@session-guard`;
 remove the block between `<!-- session-guard:begin` and `<!-- session-guard:end -->` from `~/.claude/CLAUDE.md`.

@@ -38,7 +38,7 @@ Other modes:
     session_guard.py --print-rules            the rules a review compares with
     session_guard.py --create-files [project_dir]  the missing project files, now
     session_guard.py --install-statusline     signed terminal status line (quota
-    session_guard.py --uninstall-statusline   readings); restores a wrapped one
+    session_guard.py --uninstall-statusline   readings); another tool's one is left alone
     session_guard.py --statusline             the status line command itself
     session_guard.py --project                project-copy mode (cloud); does
                                               nothing when the plugin is installed
@@ -578,23 +578,21 @@ def signed(entry):
 
 
 def install_statusline():
-    """Writes Session Guard's signed status line. An older signed one is replaced; another tool's one is kept in
-    the setup record and run by ours, its output shown unchanged."""
+    """Writes Session Guard's signed status line, or replaces an older signed one. Another tool's status line is
+    left alone: then the terminal gives no quota readings (the desktop app reads its usage tool anyway)."""
     settings = load_settings()
     if settings is None:
         return "settings.json cannot be read: not changed"
     current = settings.get("statusLine")
     if current and not signed(current):
-        cfg = load_config()
-        cfg["statusline_original"] = current
-        save_config(cfg)
-    entry = dict(current) if signed(current) else {"type": "command"}
+        return "another status line is in place: not changed (no quota readings in the terminal)"
+    entry = dict(current) if current else {"type": "command"}
     entry["command"] = statusline_command()
-    if settings.get("statusLine") == entry:
+    if current == entry:
         return "already in place"
     settings["statusLine"] = entry
     save_settings(settings)
-    return "wrapped the existing status line" if current and not signed(current) else "installed"
+    return "installed"
 
 
 def uninstall_statusline():
@@ -603,15 +601,9 @@ def uninstall_statusline():
         return "settings.json cannot be read: not changed"
     if not signed(settings.get("statusLine")):
         return "no Session Guard status line"
-    cfg = load_config()
-    original = cfg.pop("statusline_original", None)
-    if original:
-        settings["statusLine"] = original
-    else:
-        settings.pop("statusLine", None)
+    settings.pop("statusLine")
     save_settings(settings)
-    save_config(cfg)
-    return "restored the original status line" if original else "removed"
+    return "removed"
 
 
 def refresh_statusline():
@@ -623,8 +615,7 @@ def refresh_statusline():
 
 
 def statusline():
-    """Terminal status line: saves the quota numbers Claude Code passes in (zero tokens), then shows the wrapped
-    original status line's output unchanged, or a short quota line of its own."""
+    """Terminal status line: saves the quota numbers Claude Code passes in (zero tokens) and shows them."""
     raw = sys.stdin.buffer.read()
     try:
         limits = json.loads(raw.decode("utf-8", errors="replace") or "{}").get("rate_limits") or {}
@@ -634,17 +625,6 @@ def statusline():
                 save_reading(name, win.get("used_percentage"), win.get("resets_at"), "statusline")
     except Exception:
         pass
-    original = load_config().get("statusline_original")
-    if isinstance(original, dict) and original.get("command"):
-        import subprocess
-        bash = shutil.which("bash")
-        try:
-            run = subprocess.run([bash, "-c", original["command"]] if bash else original["command"], shell=not bash,
-                                 input=raw, capture_output=True, timeout=10)
-            sys.stdout.buffer.write(run.stdout)
-        except Exception:
-            pass
-        return 0
     found = readings()
     out(" · ".join("%s %d%%" % (label, found[name]["used_percent"]) for name, label in WINDOWS if name in found)
         or "Session Guard")

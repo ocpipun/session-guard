@@ -591,30 +591,19 @@ class Guard(unittest.TestCase):
         self.assertEqual(self.run_hook("UserPromptSubmit", "s1", t, "go"), {})  # terminal: the status line reads it
 
     # --- status line ----------------------------------------------------------
-    def test_statusline_wraps_and_restores_original(self):
+    def test_other_status_line_is_left_alone(self):
         path = os.path.join(self.home, ".claude", "settings.json")
-        original = {"type": "command", "command": "echo other-tool"}
+        original = {"statusLine": {"type": "command", "command": "echo other-tool"}, "model": "x"}
         with open(path, "w") as fh:
-            json.dump({"statusLine": original, "model": "x"}, fh)
-        self.assertIn("wrapped", self.cli("--install-statusline"))
-        self.assertIn("already", self.cli("--install-statusline"))
+            json.dump(original, fh)
+        self.assertIn("another status line", self.cli("--install-statusline"))
+        self.assertIn("no Session Guard", self.cli("--uninstall-statusline"))
         with open(path) as fh:
-            settings = json.load(fh)
-        self.assertIn("session-guard-statusline", settings["statusLine"]["command"])
-        self.assertEqual(settings["model"], "x")
-        data = {"rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": time.time() + 3600},
-                                "seven_day": {"used_percentage": 41, "resets_at": time.time() + 86400}}}
-        r = subprocess.run([sys.executable, "-I", SCRIPT, "--statusline"], input=json.dumps(data).encode(),
-                           capture_output=True, env=self.env)
-        self.assertIn(b"other-tool", r.stdout)
-        with open(os.path.join(self.home, ".claude", "session_guard", "session_follow", "weekly.json")) as fh:
-            self.assertEqual(json.load(fh)["used_percent"], 41)
-        self.assertIn("restored", self.cli("--uninstall-statusline"))
-        with open(path) as fh:
-            self.assertEqual(json.load(fh)["statusLine"], original)
+            self.assertEqual(json.load(fh), original)
 
     def test_statusline_alone_shows_quota(self):
-        self.cli("--install-statusline")
+        self.assertIn("installed", self.cli("--install-statusline"))
+        self.assertIn("already", self.cli("--install-statusline"))
         data = {"rate_limits": {"five_hour": {"used_percentage": 7, "resets_at": time.time() + 3600}}}
         r = subprocess.run([sys.executable, "-I", SCRIPT, "--statusline"], input=json.dumps(data).encode(),
                            capture_output=True, env=self.env)

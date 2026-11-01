@@ -46,7 +46,7 @@ Session Guard fixes all three with measurements instead of guesses.
 
 Session Guard follows your **5-hour** and **weekly (all models)** quota, so a session stops cleanly before the quota runs out instead of in the middle of a step.
 
-- **Terminal:** read from the status line Claude Code gives Session Guard, at zero token cost.
+- **Terminal:** read from Session Guard's status line, at zero token cost (only if you have no other status line).
 - **Desktop app:** status lines do not run there, so Claude reads the app's usage tool when the last reading is older than 20 minutes (with every prompt from 85% 5-hour or 95% weekly; during long work at most every 5 minutes). About 400 tokens per reading (estimate).
 - **At 90% (5-hour) or 98% (weekly)**, when the reset is at least 45 minutes away: Claude starts no new task, brings the current work to a hand-over-ready state within 15 minutes and writes one line into STATUS.md ("stopped at ..."). Then the session locks until the reset: "Quota 91% (5-hour), resets at 14:10. Continue after that." Sessions started meanwhile are locked at once. A reset closer than 45 minutes: work goes on.
 - **After the reset** the lock clears by itself. If you were away for over an hour in normal mode, the break rule applies as usual.
@@ -100,7 +100,7 @@ Session Guard does **nothing** until its setup is approved. The setup starts by 
 1. It scans your global `~/.claude` (CLAUDE.md, memory files, skills, commands, agents, scripts, output styles, rules, hooks) and every project Claude Code has sessions for.
 2. It lists everything that conflicts with Session Guard: rules on context limits, hand-offs, breaks, ending sessions, STATUS files or reply style that say something different or repeat Session Guard, and skills, scripts or hooks that do the same job. Project facts and a project's own STATUS layout are not conflicts.
 3. It also lists files that do the job of the project files under another name (AGENTS.md, GEMINI.md, .cursorrules, .windsurfrules, .clinerules, copilot-instructions.md, HANDOFF*, NOTES*, TODO*, PROGRESS*, CONTEXT.md, MEMORY.md, status files): conflicting lines are deleted, useful content moves into STATUS.md / STATUS_ARCHIVE.md, missing project files are created.
-4. It explains the status line it writes into `~/.claude/settings.json` (terminal quota readings, zero tokens; an existing status line keeps working and comes back on uninstall; the code is public here, MIT).
+4. It explains the status line it writes into `~/.claude/settings.json` (terminal quota readings, zero tokens; if you already have another status line, it is left alone and the terminal gives no quota readings; the code is public here, MIT).
 5. You approve the list with one answer (you may say an item is not a conflict). The approved items are deleted for good (no backup copies, so nothing half-moved is left behind) and the general rules block is written into `~/.claude/CLAUDE.md` (created if missing; your other rules stay). Session Guard is on at once in every open session; no second restart.
 6. **If you do not approve, Session Guard stays off.** Run `/session-guard:setup` again any time.
 
@@ -118,7 +118,7 @@ The line is your approval: in one go Claude writes a hand-off note into `docs/ST
 
 ## Uninstall
 
-Ask Claude to uninstall Session Guard. It first restores your earlier status line (`session_guard.py --uninstall-statusline`), then runs:
+Ask Claude to uninstall Session Guard. It first removes its status line (`session_guard.py --uninstall-statusline`), then runs:
 
 ```bash
 claude plugin uninstall session-guard@session-guard
