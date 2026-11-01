@@ -1,6 +1,6 @@
 # Session Guard
 
-**Sürüm 1.2** · Açık kaynak, **MIT lisansı** ile yayımlandı · [English](README.md)
+**Sürüm 1.4** · Açık kaynak, **MIT lisansı** ile yayımlandı · [English](README.md)
 
 Session Guard, Claude Code için bir eklentidir. Claude'un kendi başına göremediği üç şeyi ölçer: oturumun ne kadar büyüdüğünü, ne kadar ara verdiğinizi ve kotanızdan ne kadar kaldığını. Bu ölçümlere göre Claude'a işi ne zaman devredeceğini ve ne zaman duracağını söyler. Biten oturumları kilitler; böylece sonradan yazılan hiçbir şey işi karıştıramaz.
 
@@ -26,7 +26,7 @@ Session Guard bunları tahminle değil ölçümle çözer.
 | Durum | Normal mod | Uzun mod |
 |---|---|---|
 | 250k token | Bildirim | Bildirim |
-| 300k | **Devir:** STATUS.md toparlanır, biten maddeler arşive taşınır, devir notu yazılır. Sonrasında: yeni görev yok, yalnız sorular | Yalnız bildirim |
+| 300k | **Devir:** STATUS.md sadeleştirilir (eski görevler ve gereksiz ayrıntılar arşive taşınır), devir notu yazılır. Sonrasında: yeni görev yok, yalnız sorular | Yalnız bildirim |
 | 350k | Hedef durma: yeni oturum açın | — |
 | 400k | **Kesin durma**, oturum kilitlenir | — |
 | 700k | — | Bildirim; iş devredilebilir hâle getirilir (Claude çalışmaya devam edebilir) |
@@ -62,7 +62,8 @@ Yalnız *sizin* yokluğunuz sayılır. Claude kendi başlattığı bir arka plan
 ### Yaptığı diğer işler
 
 - **Oturum başında** Claude kuralları ve `docs/STATUS.md` dosyanızı kendiliğinden alır. Bir daha "STATUS.md'yi oku" yazmazsınız.
-- **Proje dosyaları:** her proje `CLAUDE.md` (kalıcı bilgiler ve kararlar), `docs/STATUS.md` (güncel durum, tek ekran) ve `docs/STATUS_ARCHIVE.md` (geçmiş) alır. STATUS.md her oturumun başında okunur, devirden sonraki yeni oturum dahil; arşiv okunmaz: Claude onu yalnız gerektiğinde arar ve sadece ilgili kısmı okur, böylece token harcanmaz. Var olan dosyaların üstüne asla yazılmaz.
+- **Proje dosyaları:** her proje `CLAUDE.md` (kalıcı bilgiler ve kararlar), `docs/STATUS.md` (güncel durum, en fazla 50 satır) ve `docs/STATUS_ARCHIVE.md` (geçmiş) alır. STATUS.md her oturumun başında okunur, devirden sonraki yeni oturum dahil; arşiv okunmaz: Claude onu yalnız gerektiğinde arar ve sadece ilgili kısmı okur, böylece token harcanmaz. Var olan dosyaların üstüne asla yazılmaz.
+- **STATUS kısa kalır (temel kural):** en fazla 50 satır. Her devirde ve güncellemede eski görevler ve gereksiz ayrıntılar arşive taşınır. STATUS 50 satırı geçecekse Claude yeni görev almaz, önce bekleyen görevleri bitirmenizi ister. Session Guard uzunluğu her mesajda denetler.
 - **Aynı işi başka adla yapan dosyalar** (AGENTS.md, GEMINI.md, .cursorrules, HANDOFF*, NOTES*, TODO*, PROGRESS*, status dosyaları ve benzerleri) onayınızla incelenir: çakışan satırlar silinir, işe yarar içerik STATUS'a ya da arşive taşınır.
 - **Tek kural seti:** Session Guard'la çakışan kurallar, skill'ler, betikler ve hook'lar kurulumda onayınızla kaldırılır.
 - **Token tasarrufu yapan yazım biçimi:** sade kelimeler, kısa cümleler, her konu numaralı, yalnız gereken etiketler: SORUN / ÖNERİ / VARSAYIM / UYARI / DOĞRULANMADI (sizin dilinizde).
@@ -82,6 +83,8 @@ Yalnız *sizin* yokluğunuz sayılır. Claude kendi başlattığı bir arka plan
 **Her projenin tek yeri var (kesin kural).** Bir proje **ya bilgisayarda ya bulutta yürütülür, ikisinde birden asla**, aynı anda da asla. Kota koruması yalnız bilgisayarda çalışır ve aynı STATUS.md'yi iki yerden yazmak birbirinden ayrılan iki sürüm doğurur.
 - Git deposu olan bir bilgisayar projesi `.claude/settings.json` dosyasına tek satırlık bir hook alır. Bu hook bilgisayarda hiçbir şey yapmaz; o deponun bulut oturumunda her mesajı Claude'a ulaşmadan durdurur.
 - Bulut projesi Session Guard'ın bulut kopyasını `.claude/session-guard/` içinde taşır. Bilgisayarda açılırsa her mesaj durdurulur.
+- **Bilgisayar koruması hemen GitHub'a gider.** Bulut oturumlarını ancak GitHub'a ulaşınca engeller; bu yüzden kurulum onu her git projesinde hemen commitleyip pushlar (Session Guard dosyaları ve kurulumun orada değiştirdiği dosyalarla birlikte; diğer değişikliklerinize dokunulmaz). Yeni bir projenin koruması ilk oturumunda pushlanır.
+- Daha önce hem bilgisayarda hem bulutta kullanılmış bir depo, kurulumda bilgisayar projesi olur (bulut kopyası kaldırılır, koruma pushlanır). Önceden açılmış bulut oturumları bilgisayardan kilitlenemez: onları claude.ai/code'da arşivleyin.
 - Bilgisayarda GitHub deposu gerekmez: Session Guard `~/.claude` içinde durur, projeye yalnız üç proje dosyasını koyar. Bulut her zaman bir depo ister.
 
 ## 4. Kurulum
@@ -99,7 +102,7 @@ Gerekenler: Claude Code (masaüstü uygulaması ya da terminal) ve Python 3 (Win
    Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard" (if it is already added: "claude plugin marketplace update session-guard"; if "claude" is not found, use the program in $CLAUDE_CODE_EXECPATH), then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
    ```
 
-3. Claude Session Guard'ı indirir, genel `~/.claude` klasörünüzü ve Claude Code'un bildiği her projeyi tarar. **Tek liste** gösterir: çakışan kurallar, skill'ler, betikler ve hook'lar; proje dosyalarının işini başka adla yapan dosyalar; eski bir Session Guard'dan kalanlar. Aynı mesaj kurulumun başka ne yaptığını da söyler: `~/.claude/CLAUDE.md`'deki genel kurallar bloğu, eksik proje dosyaları, `~/.claude/settings.json`'daki durum çubuğu ve git projelerindeki bilgisayar koruması. Uygulama dili okunamazsa şunu da sorar: "Which language would you like session-guard notices in?"
+3. Claude Session Guard'ı indirir, genel `~/.claude` klasörünüzü ve Claude Code'un bildiği her projeyi tarar. **Tek liste** gösterir: çakışan kurallar, skill'ler, betikler ve hook'lar; proje dosyalarının işini başka adla yapan dosyalar; eski bir Session Guard'dan kalanlar. Aynı mesaj kurulumun başka ne yaptığını da söyler: `~/.claude/CLAUDE.md`'deki genel kurallar bloğu, eksik proje dosyaları, `~/.claude/settings.json`'daki durum çubuğu ve git projelerindeki bilgisayar koruması (hemen GitHub'a pushlanır). Uygulama dili okunamazsa şunu da sorar: "Which language would you like session-guard notices in?"
 4. **Bir kez** cevap verirsiniz. Onaylanan maddeler kalıcı olarak silinir (yedek kopya yok). **Reddederseniz hiçbir şey kurulmaz.**
 5. Claude eklentiyi kurar (eski bir sürüm varsa yalnız güncellenir; elle bir şey silmeniz gerekmez).
 6. Son adım: **Claude'u tamamen kapatın** (masaüstü uygulamasında sistem tepsisinden de) **ve yeniden açın.** O zamana kadar açık oturumlar eskisi gibi çalışır. Yeniden açtıktan sonra hiçbir şey yazmazsınız, size hiçbir şey sorulmaz; aynı sohbetlerde devam edebilirsiniz.
@@ -177,7 +180,7 @@ Ardından `~/.claude/CLAUDE.md`'deki `<!-- session-guard:begin` ile `<!-- sessio
 - "Her proje", Claude Code'un oturumu olan her projedir. Claude Code'da hiç açılmamış klasörler ilk açıldıklarında incelenir.
 - Bir şeyin çakışıp çakışmadığına Claude karar verir, siz onaylarsınız; betik yalnız adayları bulur.
 - Eşikler betikte sabittir (`NORMAL_STEPS`, `LONG_STEPS`, `STOP_AT`). Çalışma değerleridir, kanıtlanmış kota tasarrufu değildir.
-- v1.2'nin masaüstü kurulumu henüz gerçek bir kurulumda denenmedi; bulut kurulumu ve güncellemesi denendi.
+- v1.4'ün masaüstü kurulumu henüz gerçek bir kurulumda denenmedi; bulut kurulumu ve güncellemesi denendi (v1.2).
 
 ## 8. Testler
 

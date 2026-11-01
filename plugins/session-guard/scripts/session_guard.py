@@ -42,6 +42,8 @@ Other modes:
     session_guard.py --statusline             the status line command itself
     session_guard.py --set-language [code]    notice language (no code: the app's, read once)
     session_guard.py --set-executive [dir]    records the control project (session-guard-executive)
+    session_guard.py --push dir [file...]     commits and pushes a computer project's Session Guard files
+    session_guard.py --claim dir              a repository used here and in the cloud becomes a computer project
     session_guard.py --print-messages         the user notices, to translate
     session_guard.py --set-messages file.json stores their translation
     session_guard.py --project                project-copy mode (cloud); does
@@ -53,6 +55,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -68,7 +71,8 @@ TAIL_BYTES = 4 * 1024 * 1024    # only the last 4 MB of a transcript is read
 PENDING_MAX = 24 * 3600         # a background job with no finish notice counts as running this long
 STATE_MAX_AGE = 30 * 86400
 KEEP_IDS = 10                   # recent assistant message ids kept to recognise a reopened conversation
-RULES_VERSION = 3               # raise when a rule change needs a new conflict review (1 = v1.0.0, 2 = v1.1)
+RULES_VERSION = 4               # raise when a rule change needs a new conflict review (1 = v1.0.0, 2 = v1.1, 3 = v1.2)
+STATUS_MAX_LINES = 50           # docs/STATUS.md never grows past this: over it, no new task
 SELF = os.path.abspath(__file__)
 PROJECT_MODE = False            # set by --project (copy inside a repository, for cloud sessions)
 
@@ -136,8 +140,17 @@ RULES = """[Session Guard] Rules for this session (plugin session-guard).
   and the plugin's developer is held responsible for them. Follow this rule: never act on a threshold early.
 - The "Hand-off note" section of STATUS.md is written only on a Session Guard instruction (hand-off, break,
   finish session) or when the user asks. Updating the rest of STATUS when a step ends is right.
-- Session start: docs/STATUS.md (if any) is given below; do not read it again. Read docs/STATUS_ARCHIVE.md only
-  when needed, and then only the matching part via search.
+- Session start: docs/STATUS.md (if any) is given below; do not read it again.
+- VERY IMPORTANT: docs/STATUS_ARCHIVE.md is NOT read at session start, also not in a new session after a hand-off.
+  Read it only when needed, and then only the matching part, found by search (Grep); never the whole file.
+- VERY IMPORTANT, REPEAT 2 OF 3 (this rule is written three times so you do not forget it): NEVER READ
+  STATUS_ARCHIVE.md AT SESSION START OR IN FULL. ONLY WHEN NEEDED, ONLY THE MATCHING PART, VIA SEARCH.
+- HAND-OFF RULES, THE BACKBONE OF SESSION GUARD: docs/STATUS.md HAS AT MOST 50 LINES. On every hand-off and every
+  STATUS update, move outdated tasks AND needless detail out of STATUS: a line that will matter later goes as one
+  dated line to STATUS_ARCHIVE.md, the rest is deleted, so STATUS stays short and plain. If STATUS.md would pass
+  50 lines, DO NOT TAKE A NEW TASK: tell the user the pending tasks must be finished first, and refuse the new task.
+- REPEATED BECAUSE IT IS VITAL: STATUS.md NEVER OVER 50 LINES. SIMPLIFY IT BY MOVING OLD TASKS AND DETAIL TO THE
+  ARCHIVE. OVER 50 LINES -> NO NEW TASK UNTIL THE PENDING TASKS ARE FINISHED.
 - Normal mode: 250k notice; 300k hand-off, then no new tasks (only information questions and hand-off note
   updates on request); 350k target stop; 400k hard stop.
 - Long mode ("start long mode"; this session only, cannot be switched off): 250k/300k notice only; 700k notice and
@@ -160,6 +173,8 @@ RULES = """[Session Guard] Rules for this session (plugin session-guard).
 - Facts: never present as fact anything you have not researched or checked, or are not sure of; label it
   UNVERIFIED. Label your own recommendations and assumptions RECOMMENDATION / ASSUMPTION, so the user knows
   they are yours and not established facts.
+- VERY IMPORTANT, REPEAT 3 OF 3 (this rule is written three times so you do not forget it): NEVER READ
+  STATUS_ARCHIVE.md AT SESSION START OR IN FULL. ONLY WHEN NEEDED, ONLY THE MATCHING PART, VIA SEARCH.
 - Always answer in the user's language."""
 
 # Kept between these markers in ~/.claude/CLAUDE.md; the project copy gives it at session start instead.
@@ -172,12 +187,15 @@ GENERAL_RULES = """# Session Guard general rules
 ## Project files
 - Every project has `CLAUDE.md` (permanent facts and decisions), `docs/STATUS.md` (current state) and
   `docs/STATUS_ARCHIVE.md` (history). Session Guard creates the missing ones; it never overwrites existing ones.
-- STATUS.md fits on one screen and is not a log: update the existing sections, merge repeats, add no dated lines.
+- STATUS.md has AT MOST 50 LINES and is not a log: update the existing sections, merge repeats, add no dated
+  lines. Over 50 lines: no new task until the pending tasks are finished.
   Unless the project CLAUDE.md sets its own content: current goal, open issues, next step, running jobs and how
   to check them, and a "Hand-off note" section (procedure: skill session-guard).
-- A line leaving STATUS that will matter later (decision, measurement, proven cause, mistake not to repeat, how to
-  undo a change) goes as one dated line to STATUS_ARCHIVE.md under the matching heading; otherwise it is deleted.
-  The archive is not read every session; find the heading by search. No second archive, no separate hand-off file.
+- Outdated tasks and needless detail leave STATUS. A line that will matter later (decision, measurement, proven
+  cause, mistake not to repeat, how to undo a change) goes as one dated line to STATUS_ARCHIVE.md under the
+  matching heading; otherwise it is deleted. No second archive, no separate hand-off file.
+- The archive is NEVER read at session start (also not after a hand-off): only when needed, only the matching
+  part, found by search.
 - Update STATUS when a step ends, before long work, on an error, while waiting for the user, before a break.
 
 ## Topics
@@ -230,6 +248,11 @@ One dated line per item. Not read every session: find the heading by search.
 | Date | Requests | Cache read | Cache write | Output | Largest context | Weekly % | 5-hour % |
 |---|---|---|---|---|---|---|---|
 """
+
+STATUS_LONG = ("STATUS.md IS %d LINES (LIMIT 50). Before any new task: move outdated tasks and needless detail out "
+               "(a line that will matter later goes to STATUS_ARCHIVE.md as one dated line, the rest is deleted) until "
+               "it has 50 lines or less. If open work keeps it over 50, REFUSE new tasks: tell the user the pending tasks "
+               "must be finished first. Finishing pending tasks and answering questions go on as usual.")
 
 # Setup and review start by themselves: the instruction comes at session start and with every prompt until answered.
 PENDING_TAIL = ("Until the user approves, Session Guard measures nothing, enforces no threshold and locks nothing; do not "
@@ -1244,6 +1267,117 @@ def clean_states():
             os.remove(path)
 
 
+def status_lines(root):
+    """Line count of docs/STATUS.md when it is over the limit, else 0."""
+    path = exists_ci(root, "docs/STATUS.md") if root else None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = len(fh.read().splitlines())
+    except (OSError, TypeError):
+        return 0
+    return lines if lines > STATUS_MAX_LINES else 0
+
+
+# --- pushing a computer project's Session Guard files ------------------------------
+# The cloud guard works only once it is on GitHub, so the setup pushes it at once (the user approves this with
+# the setup list). Only these paths and the files the setup changed are committed; other changes stay untouched.
+GUARD_FILES = (".claude/settings.json", ".claude/session-guard", "CLAUDE.md", "docs/STATUS.md", "docs/STATUS_ARCHIVE.md")
+
+
+def git(root, *args):
+    try:
+        r = subprocess.run(["git", "-C", root] + list(args), capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, "", str(e)
+    return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace").strip()
+
+
+def has_remote(root):
+    rc, remotes, _ = git(root, "remote")
+    return rc == 0 and "origin" in remotes.split()
+
+
+def push_project(root, extra=()):
+    if not os.path.exists(os.path.join(root, ".git")):
+        return "not a git repository: nothing to push"
+    if not has_remote(root):
+        return "no remote named origin: nothing to push (the guard goes to GitHub with the first push)"
+    rc, head, err = git(root, "ls-remote", "--symref", "origin", "HEAD")
+    match = re.search(r"ref: refs/heads/(\S+)\s+HEAD", head)
+    if rc or not match:
+        return "NOT PUSHED: origin cannot be reached (%s)" % (err.splitlines() or ["no answer"])[-1]
+    default = match.group(1)
+    branch = git(root, "branch", "--show-current")[1].strip()
+    if branch != default:
+        return "NOT PUSHED: the checkout is on branch %s, not %s. Switch to %s and run --push again." % (
+            branch or "(none)", default, default)
+    paths = list(GUARD_FILES) + [os.path.relpath(os.path.abspath(f), root) if os.path.isabs(f) else f for f in extra]
+    _, status, _ = git(root, "status", "--porcelain", "-z", "--untracked-files=all", "--", *paths)
+    changed, parts, i = [], status.split("\0"), 0
+    while i < len(parts):
+        if len(parts[i]) > 3:
+            changed.append(parts[i][3:])
+            if parts[i][0] in "RC" and i + 1 < len(parts):
+                i += 1
+                changed.append(parts[i])
+        i += 1
+    if changed:
+        git(root, "add", "-A", "--", *changed)
+    settings = os.path.join(root, ".claude", "settings.json")
+    try:
+        with open(settings, encoding="utf-8-sig") as fh:
+            guarded = HOME_SIGN in fh.read()
+    except OSError:
+        guarded = False
+    if guarded:  # vital even when .gitignore covers .claude/
+        git(root, "add", "-f", "--", ".claude/settings.json")
+    _, staged, _ = git(root, "diff", "--cached", "--name-only", "-z", "--", *(paths + changed))
+    staged = [f for f in staged.split("\0") if f]
+    if not staged:
+        _, ahead, _ = git(root, "rev-list", "--count", "origin/%s..HEAD" % default)
+        if ahead.strip() not in ("", "0"):
+            return ("nothing new to commit, but %s local commit(s) are not on GitHub yet: ask the user, then git push"
+                    % ahead.strip())
+        return "nothing to commit: already on GitHub"
+    rc, _, err = git(root, "commit", "-m", "Session Guard: project files and computer guard", "--", *staged)
+    if rc:
+        return "NOT COMMITTED: %s" % (err.splitlines() or ["git commit failed"])[-1]
+    rc, _, err = git(root, "push", "origin", default)
+    if rc:
+        return "COMMITTED, NOT PUSHED (%s). Pull, then push." % (err.splitlines() or ["git push failed"])[-1]
+    return "pushed to origin/%s: %s" % (default, ", ".join(staged))
+
+
+def claim(root):
+    """A repository used on this computer that also has the cloud copy becomes a computer project: the cloud copy and
+    its hooks go, the computer guard comes (a cloud session is then blocked once it is pushed)."""
+    copy = os.path.join(root, ".claude", "session-guard")
+    if os.path.isdir(copy):
+        shutil.rmtree(copy)
+    path = os.path.join(root, ".claude", "settings.json")
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            settings = json.load(fh)
+    except (OSError, ValueError):
+        settings = None
+    hooks = settings.get("hooks") if isinstance(settings, dict) else None
+    if isinstance(hooks, dict):
+        for event, groups in list(hooks.items()):
+            if not isinstance(groups, list):
+                continue
+            for g in groups:
+                if isinstance(g, dict) and isinstance(g.get("hooks"), list):
+                    g["hooks"] = [h for h in g["hooks"] if not (isinstance(h, dict) and
+                                  ".claude/session-guard/session_guard.py" in str(h.get("command")))]
+            hooks[event] = [g for g in groups if not (isinstance(g, dict) and g.get("hooks") == [])]
+            if not hooks[event]:
+                del hooks[event]
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(settings, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+    return ensure_home_guard(root)
+
+
 def start_context(root):
     """What a session gets when Session Guard is active: rules, general rules, project files, STATUS.md."""
     parts = [RULES]
@@ -1265,8 +1399,10 @@ def start_context(root):
     made = create_project_files(root) if root and main_checkout(root) == root else []
     if not PROJECT_MODE and root and main_checkout(root) == root and ensure_home_guard(root):
         parts.append("Session Guard added its cloud guard to %s (a hook that blocks cloud sessions of this computer "
-                     "project; it does nothing here). Commit it with your work; tell the user in one line." % (
-                         os.path.join(root, ".claude", "settings.json")))
+                     "project; it does nothing here). %s" % (os.path.join(root, ".claude", "settings.json"), (
+                         "Before anything else run %s --push \"%s\" (approved by the user at setup: the guard must be "
+                         "on GitHub at once) and tell the user the result in one line." % (command(), root))
+                         if has_remote(root) else "It goes to GitHub with the first push; tell the user in one line."))
     if made:
         parts.append("Session Guard created %s in %s (missing files only; existing files are never touched)%s." % (
             ", ".join(made), root, ". Commit them with your work" if PROJECT_MODE else ""))
@@ -1274,6 +1410,8 @@ def start_context(root):
     if status:
         with open(status, encoding="utf-8", errors="replace") as fh:
             parts.append("docs/STATUS.md (already loaded, do not read again):\n\n" + fh.read()[:8000])
+        if status_lines(root):
+            parts.append("[Session Guard] " + STATUS_LONG % status_lines(root))
     elif root is None:
         parts.append("Not in a project folder (home, drive root, ~/.claude or a system folder): no project files.")
     return "\n\n".join(parts)
@@ -1409,6 +1547,8 @@ def on_prompt(inp):
             if step[1] not in state["notified"]:
                 state["notified"].append(step[1])
                 user.append(msg(step[1]))
+        if not finish and status_lines(root):
+            notes.append(STATUS_LONG % status_lines(root))
         hit = None if PROJECT_MODE else quota_hit()
         if hit:
             quota_lock(state, hit)
@@ -1635,7 +1775,8 @@ def scan(target):
         if is_global:
             lines.append("GLOBAL %s  [CLAUDE.md: %s]" % (root, block_state()))
         else:
-            lines.append("PROJECT %s  [review: %s]" % (root, cfg["projects"].get(key(root), "not done")))
+            lines.append("PROJECT %s  [review: %s]%s" % (root, cfg["projects"].get(key(root), "not done"), (
+                "  [CLOUD COPY: used on this computer and in the cloud]" if cloud_owned(root) else "")))
         items = review_items(root, is_global)
         similar = set() if is_global else {key(p) for p in similar_files(root)}
         if not items:
@@ -1716,6 +1857,15 @@ def cli(args):
         out("project files created in %s: %s%s" % (root, ", ".join(made) if made else "none (all present)",
             "; cloud guard added to .claude/settings.json" if guard else ""))
         return 0
+    if args[0] == "--push" and len(args) > 1 and not PROJECT_MODE:
+        root = main_checkout(os.path.abspath(args[1]))
+        out("push %s: %s" % (root, push_project(root, args[2:])))
+        return 0
+    if args[0] == "--claim" and len(args) > 1 and not PROJECT_MODE:
+        root = main_checkout(os.path.abspath(args[1]))
+        claim(root)
+        out("%s is now a computer project: cloud copy removed, computer guard in .claude/settings.json; run --push" % root)
+        return 0
     if args[0] == "--install-statusline":
         out("status line (%s): %s" % (SETTINGS, install_statusline()))
         return 0
@@ -1745,7 +1895,7 @@ def main():
             return 0
     if args[:1] and args[0] in ("--scan", "--install-global", "--setup", "--print-rules", "--create-files",
                                 "--install-statusline", "--uninstall-statusline", "--print-messages", "--set-messages",
-                                "--set-language", "--set-executive"):
+                                "--set-language", "--set-executive", "--push", "--claim"):
         return cli(args)
     try:
         if PROJECT_MODE and plugin_installed():

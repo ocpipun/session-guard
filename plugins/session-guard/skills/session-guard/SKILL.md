@@ -12,9 +12,11 @@ The rules themselves are given at session start by the plugin.
 Only when a Session Guard instruction or the user asks for it, never earlier on your own (250k is a notice only).
 1. Read `docs/STATUS.md` (create `docs/` and the file if missing). If the project's CLAUDE.md sets its own rules
    for STATUS, follow them.
-2. Remove finished items and needless detail. If a line will matter later (decision, measurement, proven cause,
-   how to undo something), move it as one dated line to `docs/STATUS_ARCHIVE.md` under the matching heading;
-   otherwise delete it. Do not read the whole archive; find the heading by search.
+2. SIMPLIFY STATUS: remove finished and outdated tasks AND needless detail. If a line will matter later
+   (decision, measurement, proven cause, how to undo something), move it as one dated line to
+   `docs/STATUS_ARCHIVE.md` under the matching heading; otherwise delete it. Do not read the whole archive; find
+   the heading by search. STATUS.md ENDS AT 50 LINES OR LESS, the hand-off note included. If open work keeps it
+   over 50, tell the user the pending tasks must be finished before any new task.
 3. Write a "## Hand-off note" section in `docs/STATUS.md` (update it if present, also when its heading is in the
    user's language; never a second one), in the user's language:
    - Date, and context from the Session Guard line

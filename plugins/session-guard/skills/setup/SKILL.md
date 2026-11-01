@@ -51,6 +51,7 @@ session-start message "notices without a translation" (after an update) means: t
 
 ## Full setup (first time, or after the rules changed)
 1. `SG --scan`: the global `~/.claude` items and every project Claude Code has sessions for, with matching lines.
+   A project marked "[CLOUD COPY: used on this computer and in the cloud]" was worked on in both places.
 2. Read every listed CLAUDE.md and memory file and every "[same job ...]" file in full, and every listed skill,
    command, agent, script, output style, rule file or hook whose name or matching lines touch the topics above.
 3. Show the user one numbered list: file and line, the text in short, why it conflicts or where it moves, what you
@@ -61,6 +62,15 @@ session-start message "notices without a translation" (after an update) means: t
    - on a computer: each project that is a git repository gets a one-line hook in its `.claude/settings.json`
      that blocks cloud sessions of it (a project lives either on the computer or in the cloud); a repository
      that already has the cloud copy is a cloud project and is blocked on the computer;
+   - on a computer, VITAL: the guard works only once it is on GitHub, so for each git project with a remote,
+     Session Guard's files there (`.claude/settings.json`, CLAUDE.md, docs/STATUS.md, docs/STATUS_ARCHIVE.md) and the
+     files this setup changes there are committed and pushed now, one project at a time, to its default branch.
+     The user's other changes are not committed. Later, a new project's guard is pushed the same way at its first
+     session. Name each repository that gets a push;
+   - each "[CLOUD COPY ...]" project (used in both places) becomes a computer project: its cloud copy is removed,
+     the guard added and pushed, so its cloud sessions are blocked (unless the user wants it to stay a cloud
+     project: then it stays blocked on this computer). Say that cloud sessions opened before cannot be locked
+     from here: the user archives them at claude.ai/code;
    - on a computer (not in a repository copy): Session Guard writes a status line command into
      `~/.claude/settings.json` (key `statusLine`). Why: in the terminal it gives Session Guard the 5-hour and weekly
      quota at zero token cost, so a session can stop before the quota runs out (the desktop app does not run status
@@ -74,7 +84,11 @@ session-start message "notices without a translation" (after an update) means: t
 5. Yes: `SG --create-files "<project>"` for each project that gets moved content, then delete, rewrite or move
    exactly the approved items, nothing else (no backup copies). `SG --install-global` (if it reports damaged
    markers, remove the broken `session-guard` marker lines by hand and run it again), `SG --install-statusline`
-   (not with `--project`), "Notices", `SG --setup approved --all`. Tell the user what was deleted, moved or changed. Run from
+   (not with `--project`), "Notices", `SG --setup approved --all`. Not with `--project`: `SG --claim "<project>"`
+   for each approved "[CLOUD COPY ...]" project, then for each git project `SG --push "<project>" <files you changed
+   there>`, one at a time. Report every result; a "NOT PUSHED" or "NOT COMMITTED" line goes to the user with what
+   to do (it is vital: until the push, cloud sessions of that repository are not blocked).
+   Tell the user what was deleted, moved, changed or pushed. Run from
    INSTALL.md (the installing session): its restart message is the last step, and sessions that started before
    the install are locked until then. Run from a "SETUP PENDING" message after a restart: Session Guard is on at
    once and the rules arrive with the next message; then handle the user's original message, if still open.

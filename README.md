@@ -1,6 +1,6 @@
 # Session Guard
 
-**Version 1.2** · Open source, released under the **MIT license** · [Türkçe](README.tr.md)
+**Version 1.4** · Open source, released under the **MIT license** · [Türkçe](README.tr.md)
 
 Session Guard is a plugin for Claude Code. It measures three things Claude cannot see by itself: how big the session has grown, how long you were away, and how much of your quota is left. Based on these measurements it tells Claude when to hand work off, when to stop, and it locks finished sessions so nothing typed later can mix things up.
 
@@ -26,7 +26,7 @@ Session Guard solves these with measurements, not guesses.
 | Situation | Normal mode | Long mode |
 |---|---|---|
 | 250k tokens | Notice | Notice |
-| 300k | **Hand-off:** STATUS.md is tidied, finished items move to the archive, a hand-off note is written. From then on: no new tasks, only questions | Notice only |
+| 300k | **Hand-off:** STATUS.md is simplified (old tasks and needless detail move to the archive), a hand-off note is written. From then on: no new tasks, only questions | Notice only |
 | 350k | Target stop: open a new session | — |
 | 400k | **Hard stop**, the session is locked | — |
 | 700k | — | Notice; work is made ready to hand off (Claude may keep working) |
@@ -62,7 +62,8 @@ Only *your* absence counts. If Claude is waiting for its own background job (a r
 ### Other things it does
 
 - **At session start** Claude gets the rules and your `docs/STATUS.md` by itself. You never type "read STATUS.md" again.
-- **Project files:** every project gets `CLAUDE.md` (permanent facts and decisions), `docs/STATUS.md` (current state, one screen) and `docs/STATUS_ARCHIVE.md` (history). STATUS.md is read at every session start, a new session after a hand-off included; the archive is not: Claude searches it only when needed and reads just the matching part, which saves tokens. Existing files are never overwritten.
+- **Project files:** every project gets `CLAUDE.md` (permanent facts and decisions), `docs/STATUS.md` (current state, at most 50 lines) and `docs/STATUS_ARCHIVE.md` (history). STATUS.md is read at every session start, a new session after a hand-off included; the archive is not: Claude searches it only when needed and reads just the matching part, which saves tokens. Existing files are never overwritten.
+- **STATUS stays short (backbone rule):** at most 50 lines. At every hand-off and update, old tasks and needless detail move to the archive. If STATUS would pass 50 lines, Claude takes no new task and asks you to finish the pending ones first. Session Guard checks the length on every message.
 - **Files doing the same job under another name** (AGENTS.md, GEMINI.md, .cursorrules, HANDOFF*, NOTES*, TODO*, PROGRESS*, status files and similar) are reviewed with your approval: conflicting lines are removed, useful content moves into STATUS or the archive.
 - **One rule set:** rules, skills, scripts and hooks that conflict with Session Guard are removed during setup, with your approval.
 - **Reply style that saves tokens:** plain words, short sentences, each issue numbered, only the labels needed: PROBLEM / RECOMMENDATION / ASSUMPTION / WARNING / UNVERIFIED (in your language).
@@ -82,6 +83,8 @@ Only *your* absence counts. If Claude is waiting for its own background job (a r
 **One home per project (strict rule).** A project is worked on **either on the computer or in the cloud, never both**, and never at the same time. Quota protection works only on the computer, and two places writing one STATUS.md drift apart.
 - A computer project that is a git repository gets a one-line hook in its `.claude/settings.json`. On the computer it does nothing; in a cloud session of that repository it stops every message before it reaches Claude.
 - A cloud project carries Session Guard's cloud copy in `.claude/session-guard/`. Opened on a computer, every message is stopped.
+- **The computer guard goes to GitHub at once.** It blocks cloud sessions only once it is on GitHub, so setup commits and pushes it right away in each git project (with Session Guard's files and the files setup changed there; your other changes are left alone). A new project's guard is pushed at its first session.
+- A repository used both on the computer and in the cloud before becomes a computer project during setup (its cloud copy is removed, the guard pushed). Cloud sessions opened before cannot be locked from the computer: archive them at claude.ai/code.
 - On a computer no GitHub repository is needed: Session Guard lives in `~/.claude` and puts only the three project files into a project. The cloud always needs a repository.
 
 ## 4. Install
@@ -99,7 +102,7 @@ Requirements: Claude Code (desktop app or terminal) and Python 3 (`python` on Wi
    Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard" (if it is already added: "claude plugin marketplace update session-guard"; if "claude" is not found, use the program in $CLAUDE_CODE_EXECPATH), then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
    ```
 
-3. Claude downloads Session Guard and scans your global `~/.claude` folder and every project Claude Code knows. It shows **one list**: conflicting rules, skills, scripts and hooks, files doing the project files' job under another name, and leftovers of an older Session Guard. The same message says what else setup does: the general rules block in `~/.claude/CLAUDE.md`, the missing project files, the status line in `~/.claude/settings.json` and the computer guard in git projects. If the app language cannot be read, it also asks: "Which language would you like session-guard notices in?"
+3. Claude downloads Session Guard and scans your global `~/.claude` folder and every project Claude Code knows. It shows **one list**: conflicting rules, skills, scripts and hooks, files doing the project files' job under another name, and leftovers of an older Session Guard. The same message says what else setup does: the general rules block in `~/.claude/CLAUDE.md`, the missing project files, the status line in `~/.claude/settings.json` and the computer guard in git projects, which is pushed to GitHub at once. If the app language cannot be read, it also asks: "Which language would you like session-guard notices in?"
 4. You answer **once**. Approved items are deleted for good (no backup copies). **If you decline, nothing is installed.**
 5. Claude installs the plugin (an older version is simply updated; nothing has to be removed by hand).
 6. Last step: **fully quit Claude** (in the desktop app also from the system tray) **and reopen it.** Until then, open sessions run as before. After reopening you type nothing and are asked nothing; you can go on in the same conversations.
@@ -177,7 +180,7 @@ Then remove the block between `<!-- session-guard:begin` and `<!-- session-guard
 - "Every project" means every project Claude Code has a session for. Folders never opened in Claude Code are reviewed when first opened.
 - Whether something conflicts is decided by Claude and approved by you; the script only finds the candidates.
 - The thresholds are fixed in the script (`NORMAL_STEPS`, `LONG_STEPS`, `STOP_AT`). They are working values, not proven quota savings.
-- The desktop install of v1.2 has not yet been tested in a live install; the cloud install and update were tested.
+- The desktop install of v1.4 has not yet been tested in a live install; the cloud install and update were tested (v1.2).
 
 ## 8. Tests
 

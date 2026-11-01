@@ -21,7 +21,7 @@ step. After the restart the user types nothing and is asked nothing.
    scripts, hooks) are conflicts like any other and go into the list.
 4. The user declines: `SG --setup declined`; nothing is installed (an older version stays as it is). Stop here.
 5. The user approves: do step 5 of the skill (changes, project files, global block, status line, notices,
-   `SG --set-executive`, `SG --setup approved --all`). Then, as the very last command: `claude plugin install session-guard@session-guard`,
+   `SG --set-executive`, `SG --setup approved --all`, `SG --claim` and `SG --push` for each git project). Then, as the very last command: `claude plugin install session-guard@session-guard`,
    or `claude plugin update session-guard@session-guard` if an older version is installed (it applies at the
    restart, so open sessions keep working until then). If neither `claude` nor `$CLAUDE_CODE_EXECPATH` works, ask the
    user to run that command in a terminal.

@@ -791,6 +791,67 @@ class Guard(unittest.TestCase):
             json.dump({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python ~/.claude/scripts/session_guard.py"}]}]}}, fh)
         self.assertIn("UserPromptSubmit: python ~/.claude/scripts/session_guard.py", self.cli("--scan"))
 
+    # --- v1.4: STATUS limit, archive rule, pushing the guard -------------------
+    def test_rules_repeat_archive_rule_and_status_limit(self):
+        rules = self.cli("--print-rules")
+        self.assertEqual(rules.count("written three times"), 2)
+        self.assertIn("REPEAT 3 OF 3", rules)
+        self.assertIn("AT MOST 50 LINES", rules)
+
+    def test_long_status_refuses_new_tasks(self):
+        root = self.project("app", {"docs/STATUS.md": "\n".join("line %d" % i for i in range(60))})
+        self.cli("--setup", "approved", root)
+        self.assertIn("STATUS.md IS 60 LINES", self.context(self.run_hook("SessionStart", "s1", cwd=root)))
+        result = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "new task", cwd=root)
+        self.assertIn("REFUSE new tasks", self.context(result))
+        with open(os.path.join(root, "docs", "STATUS.md"), "w") as fh:
+            fh.write("short\n")
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "go", cwd=root), {})
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, env=self.env, check=True).stdout.decode()
+
+    def test_setup_pushes_guard_and_project_files_only(self):
+        self.env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        remote, root = os.path.join(self.home, "remote.git"), os.path.join(self.home, "work", "app")
+        self.git("init", "--bare", "-b", "main", remote)
+        self.git("clone", remote, root)
+        with open(os.path.join(root, "README.md"), "w") as fh:
+            fh.write("x\n")
+        self.git("add", "README.md", cwd=root)
+        self.git("commit", "-m", "first", cwd=root)
+        self.git("push", "origin", "main", cwd=root)
+        self.cli("--setup", "approved", root)
+        self.assertIn("--push", self.context(self.run_hook("SessionStart", "s1", cwd=root)))
+        with open(os.path.join(root, "mine.txt"), "w") as fh:
+            fh.write("not Session Guard's\n")
+        with open(os.path.join(root, "README.md"), "w") as fh:
+            fh.write("changed by the setup\n")
+        self.assertIn("pushed to origin/main", self.cli("--push", root, "README.md"))
+        files = self.git("--git-dir", remote, "ls-tree", "-r", "--name-only", "main").split()
+        for name in (".claude/settings.json", "CLAUDE.md", "docs/STATUS.md", "docs/STATUS_ARCHIVE.md"):
+            self.assertIn(name, files)
+        self.assertNotIn("mine.txt", files)  # the user's other changes are left alone
+        self.assertIn("changed by the setup", self.git("--git-dir", remote, "show", "main:README.md"))
+        self.assertIn("nothing to commit", self.cli("--push", root))
+        self.git("checkout", "-b", "feature", cwd=root)
+        self.assertIn("NOT PUSHED", self.cli("--push", root))
+
+    def test_repository_used_on_both_becomes_computer_project(self):
+        repo = self.project("both", {".claude/settings.json": json.dumps(
+            {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}]}})})
+        os.makedirs(os.path.join(repo, ".git"))
+        subprocess.run([sys.executable, "-I", SETUP, "--reviewed", repo], capture_output=True, env=self.env, check=True)
+        self.assertIn("CLOUD COPY", self.cli("--scan", repo))
+        self.cli("--claim", repo)
+        self.assertFalse(os.path.exists(os.path.join(repo, ".claude", "session-guard")))
+        text = self.read(repo, ".claude", "settings.json")
+        self.assertIn("session-guard-home", text)
+        self.assertIn("echo mine", text)
+        self.assertNotIn("session-guard/session_guard.py", text)
+        self.cli("--setup", "approved", repo)
+        self.assertNotIn("cloud project", json.dumps(self.run_hook("SessionStart", "s1", cwd=repo)))
+
 
 if __name__ == "__main__":
     unittest.main()
