@@ -111,7 +111,11 @@ Bundan sonra o bilgisayardaki her projede çalışır. Sonradan açılan ve kend
 
 ### Bulutta
 
-Bulut oturumları eklenti kurmaz. Session Guard her depoya bir kez, o deponun bir bulut oturumundan kurulur:
+Bulut oturumları eklenti kurmaz. Session Guard her depoya bir kez, o deponun bir bulut oturumundan kurulur.
+
+**Başlamadan önce oturumun izin modunu Auto'dan "Accept edits" (düzenlemeleri kabul et) moduna alın.** Kurulum Claude'un kendi kurallarını (CLAUDE.md) ve hook'larını (`.claude/settings.json`) değiştirir; Auto modda güvenlik denetimi bunu, onay verseniz bile, kendini değiştirme (self-modification) sayıp engeller.
+
+Sonra şunu yapıştırın:
 
 ```
 Install Session Guard: git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard, then follow /tmp/session-guard/CLOUD.md

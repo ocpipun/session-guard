@@ -111,7 +111,11 @@ It then works in every project on that computer. A project opened later that has
 
 ### In the cloud
 
-Cloud sessions do not install plugins. Session Guard is installed into each repository once, from a cloud session of that repository:
+Cloud sessions do not install plugins. Session Guard is installed into each repository once, from a cloud session of that repository.
+
+**Before you start, switch the session's permission mode from Auto to "Accept edits".** Setup changes Claude's own rules (CLAUDE.md) and hooks (`.claude/settings.json`); in Auto mode the safety check blocks this as self-modification, even after your approval.
+
+Then paste:
 
 ```
 Install Session Guard: git clone --depth 1 https://github.com/ocpipun/session-guard /tmp/session-guard, then follow /tmp/session-guard/CLOUD.md
