@@ -96,7 +96,7 @@ Requirements: Claude Code (desktop app or terminal) and Python 3 (`python` on Wi
 2. In a session there, paste this one line:
 
    ```
-   Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard", then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
+   Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard" (if it is already added: "claude plugin marketplace update session-guard"; if "claude" is not found, use the program in $CLAUDE_CODE_EXECPATH), then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
    ```
 
 3. Claude downloads Session Guard and scans your global `~/.claude` folder and every project Claude Code knows. It shows **one list**: conflicting rules, skills, scripts and hooks, files doing the project files' job under another name, and leftovers of an older Session Guard. The same message says what else setup does: the general rules block in `~/.claude/CLAUDE.md`, the missing project files, the status line in `~/.claude/settings.json` and the computer guard in git projects. If the app language cannot be read, it also asks: "Which language would you like session-guard notices in?"

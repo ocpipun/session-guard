@@ -96,7 +96,7 @@ Gerekenler: Claude Code (masaüstü uygulaması ya da terminal) ve Python 3 (Win
 2. Oradaki bir oturuma şu tek satırı yapıştırın:
 
    ```
-   Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard", then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
+   Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard" (if it is already added: "claude plugin marketplace update session-guard"; if "claude" is not found, use the program in $CLAUDE_CODE_EXECPATH), then follow INSTALL.md in ~/.claude/plugins/marketplaces/session-guard
    ```
 
 3. Claude Session Guard'ı indirir, genel `~/.claude` klasörünüzü ve Claude Code'un bildiği her projeyi tarar. **Tek liste** gösterir: çakışan kurallar, skill'ler, betikler ve hook'lar; proje dosyalarının işini başka adla yapan dosyalar; eski bir Session Guard'dan kalanlar. Aynı mesaj kurulumun başka ne yaptığını da söyler: `~/.claude/CLAUDE.md`'deki genel kurallar bloğu, eksik proje dosyaları, `~/.claude/settings.json`'daki durum çubuğu ve git projelerindeki bilgisayar koruması. Uygulama dili okunamazsa şunu da sorar: "Which language would you like session-guard notices in?"
