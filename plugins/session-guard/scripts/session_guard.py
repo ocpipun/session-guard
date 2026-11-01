@@ -663,14 +663,22 @@ def ensure_home_guard(root):
         settings = {}
     except (OSError, ValueError):
         return False  # a broken file is left alone
-    if not isinstance(settings, dict) or has_home_guard(settings) or not isinstance(settings.setdefault("hooks", {}), dict):
+    if not isinstance(settings, dict) or not isinstance(settings.setdefault("hooks", {}), dict):
         return False
     groups = settings["hooks"].setdefault("UserPromptSubmit", [])
     if not isinstance(groups, list):
         return False
     block = json.dumps({"decision": "block", "reason": msg("computer_project_in_cloud")}).replace("'", "\\u0027")
-    groups.append({"hooks": [{"type": "command", "timeout": 5, "command":
-                   "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && printf '%%s' '%s'; exit 0 # %s" % (block, HOME_SIGN)}]})
+    command = "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && printf '%%s' '%s'; exit 0 # %s" % (block, HOME_SIGN)
+    old = [h for g in groups if isinstance(g, dict) for h in g.get("hooks", []) if isinstance(h, dict)
+           and HOME_SIGN in str(h.get("command"))]
+    if old:  # an older version's guard is updated in place, never doubled
+        if all(h.get("command") == command for h in old):
+            return False
+        for h in old:
+            h["command"] = command
+    else:
+        groups.append({"hooks": [{"type": "command", "timeout": 5, "command": command}]})
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(settings, fh, indent=2, ensure_ascii=False)
@@ -1010,7 +1018,8 @@ def exists_ci(base, rel):
 
 
 def settings_hooks(path):
-    """Hook commands of a settings file, Session Guard's own excluded."""
+    """Hook commands of a settings file. Only the repository copy's hooks and the computer guard are excluded: any
+    other hook that calls a session_guard.py (an old hand-made or v1.0 copy) is a leftover the review must list."""
     try:
         with open(path, encoding="utf-8-sig") as fh:
             hooks = json.load(fh).get("hooks") or {}
@@ -1018,7 +1027,8 @@ def settings_hooks(path):
         return []
     return ["%s: %s" % (event, h.get("command") or h.get("type")) for event, groups in hooks.items()
             if isinstance(groups, list) for g in groups if isinstance(g, dict)
-            for h in g.get("hooks", []) if isinstance(h, dict) and "session_guard.py" not in (h.get("command") or "")
+            for h in g.get("hooks", []) if isinstance(h, dict)
+            and ".claude/session-guard/session_guard.py" not in (h.get("command") or "")
             and HOME_SIGN not in (h.get("command") or "")]
 
 

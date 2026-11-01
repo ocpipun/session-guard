@@ -740,6 +740,13 @@ class Guard(unittest.TestCase):
         self.assertEqual(settings["permissions"]["allow"], ["Bash(ls)"])
         command = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
         self.assertNotIn("cloud guard", self.context(self.run_hook("SessionStart", "s2", cwd=root)))  # added once
+        stale = json.loads(self.read(root, ".claude", "settings.json"))
+        stale["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] = "exit 0 # session-guard-home (old)"
+        with open(os.path.join(root, ".claude", "settings.json"), "w") as fh:
+            json.dump(stale, fh)
+        self.run_hook("SessionStart", "s3", cwd=root)  # an older guard is updated in place
+        groups = json.loads(self.read(root, ".claude", "settings.json"))["hooks"]["UserPromptSubmit"]
+        self.assertEqual([h["command"] for g in groups for h in g["hooks"]], [command])
         self.assertNotIn("Stop:", self.cli("--scan", root))  # the guard is not a conflict
         here = subprocess.run(["bash", "-c", command], capture_output=True, env=self.env)
         self.assertEqual(here.stdout, b"")  # on the computer it does nothing
@@ -777,6 +784,12 @@ class Guard(unittest.TestCase):
         self.assertNotIn(old, commands)
         self.assertIn("echo mine", commands)
         self.assertEqual(len(commands), 3)  # guard + 24-hour watch + the user's own
+
+
+    def test_old_global_session_guard_hook_is_listed(self):
+        with open(os.path.join(self.home, ".claude", "settings.json"), "w") as fh:
+            json.dump({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python ~/.claude/scripts/session_guard.py"}]}]}}, fh)
+        self.assertIn("UserPromptSubmit: python ~/.claude/scripts/session_guard.py", self.cli("--scan"))
 
 
 if __name__ == "__main__":
