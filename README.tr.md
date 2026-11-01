@@ -40,7 +40,7 @@ Session Guard bu üçünü tahminle değil ölçümle çözer.
 - **Bilgi bilgidir.** Claude araştırmadığı ya da emin olmadığı şeyi kesin bilgi gibi sunmaz (DOĞRULANMADI diye işaretler); önerilerini ve varsayımlarını kendi önerisi / varsayımı olarak belirtir.
 - **Proje dosyaları.** Her yeni projenin ilk oturumunda `CLAUDE.md`, `docs/STATUS.md` ve `docs/STATUS_ARCHIVE.md` oluşturulur. Var olan dosyalar (büyük/küçük harf farkı olsa da, ya da `.claude/CLAUDE.md`) asla yeniden oluşturulmaz, üzerine yazılmaz. Ana klasörünüzde, sürücü kökünde ve sistem klasörlerinde hiçbir şey oluşturulmaz; git worktree ana kopyanın dosyalarını kullanır.
 - **Tek kural seti.** Session Guard'ın genel kuralları genel `~/.claude/CLAUDE.md` dosyanızda işaretli bir blokta durur. Bunlarla çelişen kural, skill, betik ve hook'lar tek seferlik kurulumda sizin onayınızla silinir (aşağıda).
-- **Her dil.** Komutlar ve eklentinin kendi metinleri İngilizcedir; Claude sizinle sizin dilinizde konuşur.
+- **Her dil.** Komutlar İngilizcedir; Claude sizinle sizin dilinizde konuşur. Uygulamanın doğrudan gösterdiği bildirimler (kilitler, engellenen mesajlar, eşikler) kurulum sırasında bir kez Claude'la konuştuğunuz dile çevrilir; o zamana kadar, ve kurulumdan önceki yeniden başlatma bildirimi, İngilizcedir.
 
 ## Kota koruması (Session Follow, yalnız bilgisayarda)
 

@@ -40,6 +40,8 @@ Other modes:
     session_guard.py --install-statusline     signed terminal status line (quota
     session_guard.py --uninstall-statusline   readings); another tool's one is left alone
     session_guard.py --statusline             the status line command itself
+    session_guard.py --print-messages         the user notices, to translate
+    session_guard.py --set-messages file.json stores their translation
     session_guard.py --project                project-copy mode (cloud); does
                                               nothing when the plugin is installed
 On any error the hook exits 0 silently: it must never break the user's work.
@@ -117,8 +119,6 @@ WATCH_WAKE = ("[Session Guard] 24-HOUR WATCH: 24 hours have passed since the use
               "ending the session with the command \"finish session\".")
 WATCH_SECONDS = int(os.environ.get("SESSION_GUARD_WATCH_SECONDS") or 24 * 3600)  # tests shorten it
 WATCH_STEP = 60                 # a watch checks once a minute whether a newer prompt replaced it (local file read, no Claude request)
-STALE_USER = ("possible bug: something has been active for over 24 hours. Please look into it; if it is stuck, "
-              "end the session with \"finish session\".")
 
 RULES = """[Session Guard] Rules for this session (plugin session-guard).
 - You cannot measure context size or time between messages. Session Guard measures them itself and writes to
@@ -242,15 +242,116 @@ REVIEW_NEEDED = ("[Session Guard] PROJECT REVIEW PENDING (%s): this project's CL
 DECLINED = ("[Session Guard] OFF%s: the user kept rules that conflict with it. Do not apply Session Guard rules. "
             "If the user asks, the review can be run again (skill %s).")
 
+
+# --- notices the user sees directly (shown by the app; Claude never sees them, so it cannot translate them) ---
+# The setup translates them once into the language the user speaks with Claude (--print-messages, then
+# --set-messages); a missing or broken translation falls back to English. Placeholders: %(name)s / %(name)d.
+MESSAGES = {
+    "n400": "Context 400k: hard limit. Session closed, open a new session.",
+    "n350": "Context 350k: target stop. Opening a new session is recommended.",
+    "n300": "Context 300k: preparing hand-off. No new tasks from now on.",
+    "n250": "Context passed 250k.",
+    "l900": "Context 900k: long-mode hard limit. Session closed, open a new session.",
+    "l800": "Context 800k: work stopped. Information questions only; hand-off will be finished before 900k.",
+    "l700": "Context 700k: making work hand-off ready.",
+    "l300": "Context passed 300k (long mode: no hand-off).",
+    "l250": "Context passed 250k (long mode).",
+    "hard_limit": "Context %(k)s, hard limit. Session closed, open a new session.",
+    "closed_context": "Session closed (context limit). Open a new session.",
+    "closed_finish": "Session closed (finish session). Open a new session.",
+    "closed_break": "Session closed (break hand-off). Open a new session.",
+    "finishing": "Finishing session: preparing hand-off. Later messages will not be delivered.",
+    "break_lock": "Break over 1 hour and context %(k)s: command not run, it goes into the hand-off note.",
+    "break_remind": "Break over 1 hour; context %(k)s, continuing in this session.",
+    "stale": "Possible bug: something has been active for over 24 hours. Please look into it; if it is stuck, end the session with \"finish session\".",
+    "restart_plugin": "This session started before Session Guard was installed or updated, so it is not protected. Your message was not sent. Fully quit Claude (tray included) and reopen it, then continue here.",
+    "restart_project": "This session started before Session Guard was installed in this repository, so it is not protected. Your message was not sent. Open a new session of this repository and continue there.",
+    "window_five_hour": "5-hour",
+    "window_weekly": "weekly",
+    "quota_block": "Quota %(percent)d%% (%(window)s), resets at %(time)s. Your message was not sent. Continue after that.",
+    "quota_stopped": "Quota %(percent)d%% (%(window)s), resets at %(time)s. Work stopped. Continue after that.",
+    "quota_stop": "Quota %(percent)d%% (%(window)s): finishing the current step, then locked until %(time)s.",
+    "setup_pending": "Setup pending: Claude starts it with your next message.",
+    "review_pending": "Project review pending: Claude starts it with your next message.",
+    "declined": "Off (conflicting rules were kept).",
+}
+PLACEHOLDER = re.compile(r"%\((\w+)\)[sd]")
+_translated = None
+
+
+def messages_path():
+    if PROJECT_MODE:
+        return os.path.join(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(), ".claude", "session-guard", "messages.json")
+    return os.path.join(STATE_DIR, "config", "messages.json")
+
+
+def translations():
+    global _translated
+    if _translated is None:
+        try:
+            with open(messages_path(), encoding="utf-8") as fh:
+                _translated = json.load(fh)
+        except (OSError, ValueError):
+            _translated = {}
+        if not isinstance(_translated, dict):
+            _translated = {}
+    return _translated
+
+
+def valid_translation(name, text):
+    return (isinstance(text, str) and text.strip() and name in MESSAGES
+            and sorted(PLACEHOLDER.findall(text)) == sorted(PLACEHOLDER.findall(MESSAGES[name])))
+
+
+def msg(name, **values):
+    """A user notice in the user's language when the setup stored a translation, else in English."""
+    text = translations().get(name)
+    if valid_translation(name, text):
+        try:
+            return "Session Guard: " + text % values
+        except (KeyError, TypeError, ValueError):
+            pass
+    return "Session Guard: " + MESSAGES[name] % values
+
+
+def missing_translations():
+    """Catalog keys a stored translation lacks (a newer version added notices); [] without a translation."""
+    found = translations()
+    if not found.get("language"):
+        return []
+    return [n for n in MESSAGES if not valid_translation(n, found.get(n))]
+
+
+def set_messages(path):
+    with open(path, encoding="utf-8-sig") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict) or not data.get("language"):
+        out("not stored: the file needs a \"language\" key and the translated messages")
+        return 1
+    old = dict(translations())
+    stored = {"language": data["language"]}
+    stored.update({n: old[n] for n in MESSAGES if valid_translation(n, old.get(n))} if old.get("language") == data["language"] else {})
+    bad = []
+    for name in MESSAGES:
+        if name in data:
+            if valid_translation(name, data[name]):
+                stored[name] = data[name]
+            else:
+                bad.append(name)
+    os.makedirs(os.path.dirname(messages_path()), exist_ok=True)
+    with open(messages_path(), "w", encoding="utf-8") as fh:
+        json.dump(stored, fh, ensure_ascii=False, indent=1)
+        fh.write("\n")
+    left = [n for n in MESSAGES if n not in stored]
+    out("stored %d notices in %s (%s)%s%s" % (len(stored) - 1, data["language"], messages_path(),
+        "; rejected (placeholders changed): " + ", ".join(bad) if bad else "",
+        "; still English: " + ", ".join(left) if left else ""))
+    return 0
+
 # --- locks -----------------------------------------------------------------
 # Each type is kept on its own in state["locks"]; clearing one never clears another. "context", "finish" and
 # "break" are permanent. "quota" clears when its window resets (or a lower reading arrives). "restart" is not
 # stored: it holds while the session has no start marker of this script (see started()).
-RESTART_PLUGIN = ("Session Guard: this session started before Session Guard was installed or updated, so it is not "
-                  "protected. Your message was not sent. Fully quit Claude (tray included) and reopen it, then continue here.")
-RESTART_PROJECT = ("Session Guard: this session started before Session Guard was installed in this repository, so it is "
-                   "not protected. Your message was not sent. Open a new session of this repository and continue there.")
-
 # --- Session Follow (quota) ---------------------------------------------------
 # One file per window, shared by every local session (the quota is per account). After its reset a file is
 # emptied and later overwritten, never deleted. Not offered in the cloud: no hook can read the quota there.
@@ -411,6 +512,13 @@ def closed(state):
     return None
 
 
+def closed_kind(state):
+    for kind in ("context", "finish", "break"):
+        if kind in state["locks"]:
+            return kind
+    return "context"
+
+
 def safe_name(sid):
     return re.sub(r"[^A-Za-z0-9-]", "_", sid or "none")
 
@@ -533,9 +641,10 @@ def clock(epoch):
     return datetime.fromtimestamp(epoch).strftime("%H:%M" if epoch - time.time() < 20 * 3600 else "%a %H:%M")
 
 
-def quota_text(info):
-    return "Session Guard: quota %d%% (%s), resets at %s. Your message was not sent. Continue after that." % (
-        info.get("percent", 0), dict(WINDOWS).get(info.get("window"), "?"), clock(info.get("resets_at", 0)))
+def quota_text(info, name="quota_block"):
+    window = info.get("window") if info.get("window") in dict(WINDOWS) else "five_hour"
+    return msg(name, percent=info.get("percent", 0), window=msg("window_" + window)[len("Session Guard: "):],
+               time=clock(info.get("resets_at", 0)))
 
 
 def quota_lock(state, hit):
@@ -883,14 +992,14 @@ def command():
 def inactive(state, root, event="SessionStart"):
     skill = "session-guard-setup" if PROJECT_MODE else "session-guard:setup"
     if state == "setup":
-        ctx, user = SETUP_NEEDED % (skill, command()), "setup pending: Claude starts it with your next message."
+        ctx, user = SETUP_NEEDED % (skill, command()), "setup_pending"
     elif state == "review":
-        ctx, user = REVIEW_NEEDED % (root, skill, command()), "project review pending: Claude starts it with your next message."
+        ctx, user = REVIEW_NEEDED % (root, skill, command()), "review_pending"
     else:
-        ctx, user = DECLINED % (" in this project" if root else "", skill), "off (conflicting rules were kept)."
+        ctx, user = DECLINED % (" in this project" if root else "", skill), "declined"
     data = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": ctx}}
     if event == "SessionStart":
-        data["systemMessage"] = "Session Guard " + user
+        data["systemMessage"] = msg(user)
     return data
 
 
@@ -971,6 +1080,11 @@ def start_context(root):
             parts.append("WARNING: the session-guard markers in ~/.claude/CLAUDE.md are damaged, so the general rules "
                          "were not refreshed. Tell the user; the setup (skill session-guard:setup) repairs it.")
         refresh_statusline()
+    missing = missing_translations()
+    if missing:
+        parts.append("Session Guard notices without a translation into %s (a newer version added them): %s. Translate "
+                     "them now, as the setup skill says (--print-messages, --set-messages), without mentioning it." % (
+                         translations()["language"], ", ".join(missing)))
     # A worktree gets the files from its main checkout through git, never a second, diverging copy.
     made = create_project_files(root) if root and main_checkout(root) == root else []
     if made:
@@ -1029,13 +1143,13 @@ def on_prompt(inp):
     sid = inp.get("session_id")
     mark = started(sid)
     if mark is None:
-        return emit({"decision": "block", "reason": RESTART_PROJECT if PROJECT_MODE else RESTART_PLUGIN})
+        return emit({"decision": "block", "reason": msg("restart_project" if PROJECT_MODE else "restart_plugin")})
     os.utime(os.path.join(STATE_DIR, "started", safe_name(sid)))  # in use: kept by the 30-day cleanup
     context, last, ids, pending, stale, _, _ = read_transcript(inp.get("transcript_path"))
     state = load_state(sid, ids)
     if closed(state):
         save_state(sid, state, ids)
-        return emit({"decision": "block", "reason": "Session Guard: session closed (%s). Open a new session." % closed(state)})
+        return emit({"decision": "block", "reason": msg("closed_" + closed_kind(state))})
     quota = state["locks"].get("quota")
     if quota and quota_cleared(quota):
         del state["locks"]["quota"]
@@ -1068,13 +1182,13 @@ def on_prompt(inp):
     if context is not None and context >= limit and not finish:
         lock(state, "context", "context %s" % k(context))
         save_state(sid, state, ids)
-        return emit({"decision": "block", "reason": "Session Guard: context %s, hard limit. Session closed, open a new session." % k(context)})
+        return emit({"decision": "block", "reason": msg("hard_limit", k=k(context))})
 
     if finish:
         lock(state, "finish", "finish session")
         notes.append('FINISH SESSION. Do nothing else the message asks. Only follow skill session-guard "Finish session" '
                       '(hand-off + measurement: python "%s" --report). The session is locked after this reply.' % SELF)
-        user.append("Finishing session: preparing hand-off. Later messages will not be delivered.")
+        user.append(msg("finishing"))
     elif not long_mode and not pending and gap is not None and gap > BREAK_SECONDS:
         if context is not None and context > BREAK_CONTEXT:
             lock(state, "break", "break over 1 hour, context %s" % k(context))
@@ -1082,17 +1196,17 @@ def on_prompt(inp):
                          'research for it. Only follow skill session-guard "Break hand-off"; copy the command into the note '
                          "word for word; tell the user to continue in a new session. The session is locked after this reply."
                          % (gap // 60, k(context)))
-            user.append("Break over 1 hour and context %s: command not run, it goes into the hand-off note." % k(context))
+            user.append(msg("break_lock", k=k(context)))
         else:
             notes.append("BREAK REMINDER: gap over 1 hour (%d min), context %s <= 100k. Remind the user in one line, then "
                          "handle the command normally." % (gap // 60, k(context)))
-            user.append("Break over 1 hour; context %s, continuing in this session." % k(context))
+            user.append(msg("break_remind", k=k(context)))
 
     if stale and not closed(state):
         notes.append(STALE_JOBS % stale)
         if "stale24" not in state["notified"]:
             state["notified"].append("stale24")
-            user.append(STALE_USER)
+            user.append(msg("stale"))
 
     if not closed(state):
         step = step_for(context, long_mode)
@@ -1101,13 +1215,12 @@ def on_prompt(inp):
                 notes.append(step[2] + (NOTICE_FORM % (step[0] // K) if step[1] not in state["notified"] else ""))
             if step[1] not in state["notified"]:
                 state["notified"].append(step[1])
-                user.append(step[3])
+                user.append(msg(step[1]))
         hit = None if PROJECT_MODE else quota_hit()
         if hit:
             quota_lock(state, hit)
             notes.append(QUOTA_STOP % (dict(WINDOWS)[hit[0]], hit[1]["used_percent"], clock(hit[1]["resets_at"])))
-            user.append("quota %d%% (%s): finishing the current step, then locked until %s." % (
-                hit[1]["used_percent"], dict(WINDOWS)[hit[0]], clock(hit[1]["resets_at"])))
+            user.append(quota_text(state["locks"]["quota"], "quota_stop"))
         elif needs_reading(state, False):
             notes.append(READ_USAGE)
 
@@ -1117,7 +1230,7 @@ def on_prompt(inp):
     data = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
                                    "additionalContext": "\n\n".join(head + (["\n".join([line] + notes)] if notes else []))}}
     if user:
-        data["systemMessage"] = "Session Guard: " + " ".join(user)
+        data["systemMessage"] = " ".join(user[:1] + [u[len("Session Guard: "):] for u in user[1:]])
     return emit(data)
 
 
@@ -1172,7 +1285,7 @@ def on_tool(inp):
             del state["locks"]["quota"]
             save_state(sid, state, ids)
         elif time.time() - quota.get("at", 0) > QUOTA_GRACE:
-            text = quota_text(quota).replace("Your message was not sent. ", "Work stopped. ")
+            text = quota_text(quota, "quota_stopped")
             return emit({"continue": False, "stopReason": text, "systemMessage": text})
         else:
             return 0
@@ -1180,26 +1293,25 @@ def on_tool(inp):
     if prompt_at and time.time() - prompt_at > PENDING_MAX and turn not in state["notified"]:
         state["notified"].append(turn)  # once per user message
         save_state(sid, state, ids)
-        return emit({"systemMessage": "Session Guard: " + STALE_USER,
+        return emit({"systemMessage": msg("stale"),
                      "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": LONG_TURN}})
     step = step_for(context, state.get("long"))
     if step and step[1] not in state["notified"]:
         state["notified"].append(step[1])
-        data = {"systemMessage": "Session Guard: " + step[3],
+        data = {"systemMessage": msg(step[1]),
                 "hookSpecificOutput": {"hookEventName": "PostToolUse",
                                        "additionalContext": "[Session Guard] Context: %s (during work). %s%s" % (
                                            k(context), step[2], NOTICE_FORM % (step[0] // K))}}
         if step[4]:
             lock(state, "context", "context %s" % k(context))
-            data.update({"continue": False, "stopReason": step[3]})
+            data.update({"continue": False, "stopReason": msg(step[1])})
         save_state(sid, state, ids)
         return emit(data)
     hit = None if PROJECT_MODE else quota_hit()
     if hit:
         quota_lock(state, hit)
         save_state(sid, state, ids)
-        return emit({"systemMessage": "Session Guard: quota %d%% (%s): finishing the current step, then locked until %s." % (
-                         hit[1]["used_percent"], dict(WINDOWS)[hit[0]], clock(hit[1]["resets_at"])),
+        return emit({"systemMessage": quota_text(state["locks"]["quota"], "quota_stop"),
                      "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "[Session Guard] " +
                          QUOTA_STOP % (dict(WINDOWS)[hit[0]], hit[1]["used_percent"], clock(hit[1]["resets_at"]))}})
     if needs_reading(state, True):
@@ -1381,6 +1493,11 @@ def cli(args):
     if args[0] == "--print-rules":
         out(RULES + "\n\n" + BLOCK_BEGIN + "\n" + GENERAL_RULES + "\n" + BLOCK_END)
         return 0
+    if args[0] == "--print-messages":
+        out(json.dumps(dict({"language": "<the language the user speaks with Claude>"}, **MESSAGES), ensure_ascii=False, indent=1))
+        return 0
+    if args[0] == "--set-messages":
+        return set_messages(args[1]) if len(args) > 1 else 2
     if args[0] == "--create-files":
         root = main_checkout(os.path.abspath(args[1] if len(args) > 1 else os.getcwd()))
         made = create_project_files(root)
@@ -1414,7 +1531,7 @@ def main():
         except Exception:  # a status line must never show an error
             return 0
     if args[:1] and args[0] in ("--scan", "--install-global", "--setup", "--print-rules", "--create-files",
-                                "--install-statusline", "--uninstall-statusline"):
+                                "--install-statusline", "--uninstall-statusline", "--print-messages", "--set-messages"):
         return cli(args)
     try:
         if PROJECT_MODE and plugin_installed():

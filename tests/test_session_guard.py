@@ -533,7 +533,7 @@ class Guard(unittest.TestCase):
         self.assertIn("QUOTA STOP", self.context(r))
         blocked = self.run_hook("UserPromptSubmit", "s1", t, "hi")
         self.assertEqual(blocked["decision"], "block")
-        self.assertIn("quota 91% (5-hour)", blocked["reason"])
+        self.assertIn("Quota 91% (5-hour)", blocked["reason"])
         self.follow("five_hour", 3, 5 * 3600)  # a newer, lower reading: the window reset
         self.assertNotIn("decision", self.run_hook("UserPromptSubmit", "s1", t, "hi"))
 
@@ -624,6 +624,30 @@ class Guard(unittest.TestCase):
         self.assertNotIn("app.py", report)
         self.assertIn("docs/STATUS.md", self.cli("--create-files", root))
         self.assertTrue(os.path.exists(os.path.join(root, "docs", "STATUS_ARCHIVE.md")))
+
+    # --- notices in the user's language -----------------------------------------
+    def test_notices_in_the_users_language(self):
+        catalog = json.loads(self.cli("--print-messages"))
+        self.assertIn("closed_finish", catalog)
+        path = os.path.join(self.home, "tr.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"language": "Turkish", "closed_finish": "Oturum kapandı (finish session). Yeni oturum açın.",
+                       "hard_limit": "Bağlam büyük, sınır.",  # placeholder %(k)s dropped: rejected
+                       "window_five_hour": "5 saatlik",
+                       "quota_block": "Kota %%%(percent)d (%(window)s), %(time)s'de sıfırlanır. Mesajınız gönderilmedi."}, fh)
+        report = self.cli("--set-messages", path)
+        self.assertIn("rejected (placeholders changed): hard_limit", report)
+        t = self.transcript("t", 50_000)
+        self.run_hook("UserPromptSubmit", "s1", t, "finish session")
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", t, "hi")["reason"],
+                         "Session Guard: Oturum kapandı (finish session). Yeni oturum açın.")
+        self.follow("five_hour", 92, 2 * 3600)
+        self.run_hook("UserPromptSubmit", "s2", self.transcript("t2", 50_000, msg_ids=("x",)), "go")
+        blocked = self.run_hook("UserPromptSubmit", "s2", self.transcript("t2", 50_000, msg_ids=("x",)), "go")["reason"]
+        self.assertIn("Kota %92 (5 saatlik)", blocked)
+        self.assertIn("hard limit", self.run_hook("UserPromptSubmit", "s3", self.transcript("t3", 410_000, msg_ids=("y",)), "go")["reason"])
+        self.follow("five_hour", 10, 2 * 3600)
+        self.assertIn("without a translation into Turkish", self.context(self.run_hook("SessionStart", "s4")))
 
 
 if __name__ == "__main__":
