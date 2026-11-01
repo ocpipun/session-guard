@@ -62,7 +62,7 @@ Yalnız *sizin* yokluğunuz sayılır. Claude kendi başlattığı bir arka plan
 ### Yaptığı diğer işler
 
 - **Oturum başında** Claude kuralları ve `docs/STATUS.md` dosyanızı kendiliğinden alır. Bir daha "STATUS.md'yi oku" yazmazsınız.
-- **Proje dosyaları:** her proje `CLAUDE.md` (kalıcı bilgiler ve kararlar), `docs/STATUS.md` (güncel durum, tek ekran) ve `docs/STATUS_ARCHIVE.md` (geçmiş) alır. Var olan dosyaların üstüne asla yazılmaz.
+- **Proje dosyaları:** her proje `CLAUDE.md` (kalıcı bilgiler ve kararlar), `docs/STATUS.md` (güncel durum, tek ekran) ve `docs/STATUS_ARCHIVE.md` (geçmiş) alır. STATUS.md her oturumun başında okunur, devirden sonraki yeni oturum dahil; arşiv okunmaz: Claude onu yalnız gerektiğinde arar ve sadece ilgili kısmı okur, böylece token harcanmaz. Var olan dosyaların üstüne asla yazılmaz.
 - **Aynı işi başka adla yapan dosyalar** (AGENTS.md, GEMINI.md, .cursorrules, HANDOFF*, NOTES*, TODO*, PROGRESS*, status dosyaları ve benzerleri) onayınızla incelenir: çakışan satırlar silinir, işe yarar içerik STATUS'a ya da arşive taşınır.
 - **Tek kural seti:** Session Guard'la çakışan kurallar, skill'ler, betikler ve hook'lar kurulumda onayınızla kaldırılır.
 - **Token tasarrufu yapan yazım biçimi:** sade kelimeler, kısa cümleler, her konu numaralı, yalnız gereken etiketler: SORUN / ÖNERİ / VARSAYIM / UYARI / DOĞRULANMADI (sizin dilinizde).

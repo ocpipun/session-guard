@@ -62,7 +62,7 @@ Only *your* absence counts. If Claude is waiting for its own background job (a r
 ### Other things it does
 
 - **At session start** Claude gets the rules and your `docs/STATUS.md` by itself. You never type "read STATUS.md" again.
-- **Project files:** every project gets `CLAUDE.md` (permanent facts and decisions), `docs/STATUS.md` (current state, one screen) and `docs/STATUS_ARCHIVE.md` (history). Existing files are never overwritten.
+- **Project files:** every project gets `CLAUDE.md` (permanent facts and decisions), `docs/STATUS.md` (current state, one screen) and `docs/STATUS_ARCHIVE.md` (history). STATUS.md is read at every session start, a new session after a hand-off included; the archive is not: Claude searches it only when needed and reads just the matching part, which saves tokens. Existing files are never overwritten.
 - **Files doing the same job under another name** (AGENTS.md, GEMINI.md, .cursorrules, HANDOFF*, NOTES*, TODO*, PROGRESS*, status files and similar) are reviewed with your approval: conflicting lines are removed, useful content moves into STATUS or the archive.
 - **One rule set:** rules, skills, scripts and hooks that conflict with Session Guard are removed during setup, with your approval.
 - **Reply style that saves tokens:** plain words, short sentences, each issue numbered, only the labels needed: PROBLEM / RECOMMENDATION / ASSUMPTION / WARNING / UNVERIFIED (in your language).
