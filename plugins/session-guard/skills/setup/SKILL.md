@@ -35,14 +35,17 @@ decisions, measurements, history go to docs/STATUS_ARCHIVE.md; permanent project
 A file emptied by moves is deleted. Another tool's own rule file (AGENTS.md and the like) is kept and only edited,
 unless the user wants it gone.
 
-## Notices in the user's language (part of every approved setup and project review)
-The app shows some Session Guard notices itself (blocked prompts, locks, thresholds); Claude never sees them, so
-they are translated once here. The language is the one the user speaks with Claude in this conversation (not the
-system's). English: skip this. Otherwise: `SG --print-messages`, translate every value into that language, keep
-every `%(name)s` / `%(name)d` placeholder exactly and leave "Session Guard", "finish session" and
-"start long mode" untranslated; write the JSON (with `"language"`) to a temporary file, `SG --set-messages <file>`,
-delete the file. Do not show the translations to the user. A message "notices without a translation" at session
-start (after an update) means: do the same for the listed keys, without mentioning it.
+## Notices (part of every approved full setup)
+The app shows some Session Guard notices itself (blocked prompts, locks, thresholds); Claude never sees them. They
+appear in the language selected in the Claude desktop app's settings; in the terminal, the cloud, web and mobile
+they are English (no hook can read the app language there). `SG --print-messages` shows the app language and the
+notices without a translation. "English" or "none": nothing to do. Otherwise translate the listed notices into that
+language, keep every `%(name)s` / `%(name)d` placeholder (`%%` is a literal percent sign) and leave "Session Guard",
+"finish session" and "start long mode" untranslated; write a JSON object {name: text} to a temporary file,
+`SG --set-messages <file>`, delete the file. Do not show the translations to the user.
+Later the user may switch the app to another language: notices are then English. If the user asks for notices in
+the new language, do the same (it is MIT-licensed; their translation is kept over updates). A session-start message
+"notices without a translation" (after an update) means: translate the listed ones, without mentioning it.
 
 ## Full setup (first time, or after the rules changed)
 1. `SG --scan`: the global `~/.claude` items and every project Claude Code has sessions for, with matching lines.
@@ -66,7 +69,7 @@ start (after an update) means: do the same for the listed keys, without mentioni
 5. Yes: `SG --create-files "<project>"` for each project that gets moved content, then delete, rewrite or move
    exactly the approved items, nothing else (no backup copies). `SG --install-global` (if it reports damaged
    markers, remove the broken `session-guard` marker lines by hand and run it again), `SG --install-statusline`
-   (not with `--project`), "Notices in the user's language", `SG --setup approved --all`. Tell the user what was deleted, moved or changed, and that
+   (not with `--project`), "Notices", `SG --setup approved --all`. Tell the user what was deleted, moved or changed, and that
    Session Guard is on from now on in every session (no restart needed). The rules arrive with the next message.
    Then handle the user's original message, if it is still open.
 6. No: change nothing; `SG --setup declined`. Tell the user Session Guard stays off and `/session-guard:setup`
@@ -74,10 +77,9 @@ start (after an update) means: do the same for the listed keys, without mentioni
 
 ## Project review (one project; message says PROJECT REVIEW PENDING)
 Same steps for that folder only: `SG --scan "<folder>"`, read, list (the status line and global block are not part
-of it), ask. Yes: `SG --create-files "<folder>"`, the changes, "Notices in the user's language" (only with `--project`;
-the plugin keeps one translation for all projects), `SG --setup approved "<folder>"`. No:
+of it), ask. Yes: `SG --create-files "<folder>"`, the changes, `SG --setup approved "<folder>"`. No:
 `SG --setup declined "<folder>"` (Session Guard stays off in that project only).
-In a repository copy (`--project`, cloud): commit the changes, the project files, `.claude/session-guard/setup.json` and `messages.json`
+In a repository copy (`--project`, cloud): commit the changes, the project files, and `.claude/session-guard/setup.json`
 with the session's work, or the next cloud session asks again.
 
 ## Uninstall (on request)

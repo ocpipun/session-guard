@@ -6,6 +6,7 @@ fake transcript, with HOME pointed at a temporary folder.
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,8 @@ class Guard(unittest.TestCase):
         self.env = dict(os.environ, HOME=self.home, USERPROFILE=self.home)
         self.env.pop("CLAUDE_PROJECT_DIR", None)  # tests run inside Claude Code: never touch the real project
         self.env.pop("CLAUDE_CODE_ENTRYPOINT", None)  # quota readings are asked for in the desktop app only
+        # the desktop app's language setting is looked up here: never the real one
+        self.env.update(LOCALAPPDATA=os.path.join(self.home, "local"), APPDATA=os.path.join(self.home, "roaming"))
         self.cli("--setup", "approved")
 
     def cli(self, *args, script=SCRIPT):
@@ -625,30 +628,58 @@ class Guard(unittest.TestCase):
         self.assertIn("docs/STATUS.md", self.cli("--create-files", root))
         self.assertTrue(os.path.exists(os.path.join(root, "docs", "STATUS_ARCHIVE.md")))
 
-    # --- notices in the user's language -----------------------------------------
-    def test_notices_in_the_users_language(self):
-        catalog = json.loads(self.cli("--print-messages"))
-        self.assertIn("closed_finish", catalog)
-        path = os.path.join(self.home, "tr.json")
+    # --- notices in the app's language ------------------------------------------
+    def app_language(self, locale):
+        self.env["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop"
+        folder = os.path.join(self.home, "local", "Claude-Data", "claude_x")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "config.json"), "w") as fh:
+            json.dump({"locale": locale, "other": 1}, fh)
+
+    def finished_block(self, sid):
+        t = self.transcript(sid, 50_000, msg_ids=(sid,))
+        self.run_hook("UserPromptSubmit", sid, t, "finish session")
+        return self.run_hook("UserPromptSubmit", sid, t, "hi")["reason"]
+
+    def test_plugin_turkish_translation_is_complete(self):
+        tr = json.loads(self.read(ROOT, "plugins", "session-guard", "messages", "tr.json"))
+        catalog = json.loads(self.cli("--print-messages").split("\n", 1)[1])
+        self.assertEqual(sorted(tr), sorted(catalog))
+        for name, text in tr.items():
+            self.assertEqual(sorted(re.findall(r"%\((\w+)\)[sd]", text)), sorted(re.findall(r"%\((\w+)\)[sd]", catalog[name])), name)
+
+    def test_desktop_app_language_picks_the_notices(self):
+        self.app_language("tr")
+        self.assertEqual(self.finished_block("a"), "Session Guard: Oturum kapandı (finish session). Yeni bir oturum açın.")
+        self.follow("five_hour", 92, 2 * 3600)
+        self.run_hook("UserPromptSubmit", "q", self.transcript("q", 50_000, msg_ids=("q",)), "go")
+        self.assertIn("Kota %92 (5 saatlik)", self.run_hook("UserPromptSubmit", "q", self.transcript("q", 50_000, msg_ids=("q",)), "go")["reason"])
+        self.app_language("fr")  # switched to a language with no translation: English
+        self.assertIn("Session closed (finish session)", self.finished_block("b"))
+        self.env.pop("CLAUDE_CODE_ENTRYPOINT")  # terminal: English
+        self.app_language("tr")
+        self.env.pop("CLAUDE_CODE_ENTRYPOINT")
+        self.assertIn("Session closed (finish session)", self.finished_block("c"))
+
+    def test_user_adds_a_translation(self):
+        self.app_language("fr")
+        self.assertIn("app language: fr", self.cli("--print-messages"))
+        path = os.path.join(self.home, "fr.json")
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump({"language": "Turkish", "closed_finish": "Oturum kapandı (finish session). Yeni oturum açın.",
-                       "hard_limit": "Bağlam büyük, sınır.",  # placeholder %(k)s dropped: rejected
-                       "window_five_hour": "5 saatlik",
-                       "quota_block": "Kota %%%(percent)d (%(window)s), %(time)s'de sıfırlanır. Mesajınız gönderilmedi."}, fh)
+            json.dump({"closed_finish": "Session fermée (finish session). Ouvrez une nouvelle session.",
+                       "hard_limit": "Contexte trop grand."}, fh)  # placeholder dropped: rejected
         report = self.cli("--set-messages", path)
         self.assertIn("rejected (placeholders changed): hard_limit", report)
-        t = self.transcript("t", 50_000)
-        self.run_hook("UserPromptSubmit", "s1", t, "finish session")
-        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", t, "hi")["reason"],
-                         "Session Guard: Oturum kapandı (finish session). Yeni oturum açın.")
-        self.follow("five_hour", 92, 2 * 3600)
-        self.run_hook("UserPromptSubmit", "s2", self.transcript("t2", 50_000, msg_ids=("x",)), "go")
-        blocked = self.run_hook("UserPromptSubmit", "s2", self.transcript("t2", 50_000, msg_ids=("x",)), "go")["reason"]
-        self.assertIn("Kota %92 (5 saatlik)", blocked)
-        self.assertIn("hard limit", self.run_hook("UserPromptSubmit", "s3", self.transcript("t3", 410_000, msg_ids=("y",)), "go")["reason"])
-        self.follow("five_hour", 10, 2 * 3600)
-        self.assertIn("without a translation into Turkish", self.context(self.run_hook("SessionStart", "s4")))
+        self.assertEqual(self.finished_block("a"), "Session Guard: Session fermée (finish session). Ouvrez une nouvelle session.")
+        self.assertIn("hard limit", self.run_hook("UserPromptSubmit", "z", self.transcript("z", 410_000, msg_ids=("z",)), "go")["reason"])
+        self.assertIn("without a translation for the app language fr", self.context(self.run_hook("SessionStart", "s4")))
 
+    def test_english_app_stores_nothing(self):
+        self.app_language("en-US")
+        path = os.path.join(self.home, "x.json")
+        with open(path, "w") as fh:
+            json.dump({"declined": "x"}, fh)
+        self.assertIn("not stored", self.cli("--set-messages", path))
 
 if __name__ == "__main__":
     unittest.main()

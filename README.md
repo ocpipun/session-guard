@@ -40,7 +40,7 @@ Session Guard fixes all three with measurements instead of guesses.
 - **Facts stay facts.** Claude never presents something it has not researched or is not sure of as fact (it is labelled UNVERIFIED), and marks its own recommendations and assumptions as its own.
 - **Project files.** In every new project the first session creates `CLAUDE.md`, `docs/STATUS.md` and `docs/STATUS_ARCHIVE.md`. Files that already exist (in any letter case, or `.claude/CLAUDE.md`) are never recreated or overwritten. Nothing is created in your home folder, a drive root or system folders, and a git worktree uses its main checkout's files.
 - **One rule set.** Session Guard's general rules live in a marked block of your global `~/.claude/CLAUDE.md`. Rules, skills, scripts and hooks that conflict with them are removed during the one-time setup, with your approval (see below).
-- **Any language.** Commands are English; Claude talks to you in your language. The notices the app shows directly (locks, blocked messages, thresholds) are translated once during setup into the language you use with Claude; until then, and for the restart notice before setup, they are English.
+- **Any language.** Commands are English; Claude talks to you in your language. The notices the app shows directly (locks, blocked messages, thresholds) come in the language selected in the Claude desktop app's settings (read from the app's local settings file; Turkish ships with the plugin, other languages are translated during setup). In the terminal, cloud, web and mobile they are English: no hook can read the app language there. Switch the app to a new language and notices turn English, until you ask Claude to add that language.
 
 ## Quota protection (Session Follow, computer only)
 

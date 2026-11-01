@@ -244,8 +244,11 @@ DECLINED = ("[Session Guard] OFF%s: the user kept rules that conflict with it. D
 
 
 # --- notices the user sees directly (shown by the app; Claude never sees them, so it cannot translate them) ---
-# The setup translates them once into the language the user speaks with Claude (--print-messages, then
-# --set-messages); a missing or broken translation falls back to English. Placeholders: %(name)s / %(name)d.
+# Language: the one selected in the Claude desktop app's settings (read from the app's local config; not a
+# documented file, so anything unexpected means English). Terminal, cloud, web and mobile: English. Translations:
+# the user's own (~/.claude/session_guard/config/messages/<locale>.json, written by --set-messages during setup
+# or on request) or the plugin's (messages/<locale>.json). A locale with no translation: English.
+# Placeholders: %(name)s / %(name)d.
 MESSAGES = {
     "n400": "Context 400k: hard limit. Session closed, open a new session.",
     "n350": "Context 350k: target stop. Opening a new session is recommended.",
@@ -276,35 +279,66 @@ MESSAGES = {
     "declined": "Off (conflicting rules were kept).",
 }
 PLACEHOLDER = re.compile(r"%\((\w+)\)[sd]")
+OWN_MESSAGES = os.path.join(STATE_DIR, "config", "messages")
+PLUGIN_MESSAGES = os.path.join(os.path.dirname(os.path.dirname(SELF)), "messages")
 _translated = None
 
 
-def messages_path():
-    if PROJECT_MODE:
-        return os.path.join(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(), ".claude", "session-guard", "messages.json")
-    return os.path.join(STATE_DIR, "config", "messages.json")
+def app_locale():
+    """The language selected in the Claude desktop app ("tr", "pt-br"), or None (English): not the desktop app,
+    a repository copy (cloud), English, or the app's config not found."""
+    if PROJECT_MODE or os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop":
+        return None
+    places = []
+    for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA"),
+                 os.path.join(HOME, "Library", "Application Support")):
+        if base:
+            places += glob.glob(os.path.join(base, "Claude-Data", "*", "config.json"))
+            places.append(os.path.join(base, "Claude", "config.json"))
+    for path in sorted((p for p in places if os.path.isfile(p)), key=os.path.getmtime, reverse=True):
+        try:
+            with open(path, encoding="utf-8-sig") as fh:
+                found = json.load(fh).get("locale")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(found, str) and re.match(r"^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$", found):
+            found = found.lower().replace("_", "-")
+            return None if found == "en" or found.startswith("en-") else found
+    return None
+
+
+def translation_file(locale, own=True):
+    return os.path.join(OWN_MESSAGES if own else PLUGIN_MESSAGES, locale + ".json")
+
+
+def load_translation(path):
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def translations():
+    """The notices for the app's language: the user's own translation over the plugin's; {} for English."""
     global _translated
     if _translated is None:
-        try:
-            with open(messages_path(), encoding="utf-8") as fh:
-                _translated = json.load(fh)
-        except (OSError, ValueError):
-            _translated = {}
-        if not isinstance(_translated, dict):
-            _translated = {}
+        locale = app_locale()
+        _translated = {}
+        if locale:
+            _translated.update(load_translation(translation_file(locale, own=False)))
+            _translated.update({n: t for n, t in load_translation(translation_file(locale)).items() if valid_translation(n, t)})
     return _translated
 
 
 def valid_translation(name, text):
-    return (isinstance(text, str) and text.strip() and name in MESSAGES
+    return (isinstance(text, str) and bool(text.strip()) and name in MESSAGES
             and sorted(PLACEHOLDER.findall(text)) == sorted(PLACEHOLDER.findall(MESSAGES[name])))
 
 
 def msg(name, **values):
-    """A user notice in the user's language when the setup stored a translation, else in English."""
+    """A user notice in the app's language when a translation exists, else in English."""
     text = translations().get(name)
     if valid_translation(name, text):
         try:
@@ -315,22 +349,23 @@ def msg(name, **values):
 
 
 def missing_translations():
-    """Catalog keys a stored translation lacks (a newer version added notices); [] without a translation."""
+    """(locale, notices without a translation) for the app's language; (None, []) for English. Every notice is
+    missing when no translation exists yet (first setup, or the user switched the app to a new language)."""
+    locale = app_locale()
+    if not locale:
+        return None, []
     found = translations()
-    if not found.get("language"):
-        return []
-    return [n for n in MESSAGES if not valid_translation(n, found.get(n))]
+    return locale, [n for n in MESSAGES if not valid_translation(n, found.get(n))]
 
 
 def set_messages(path):
-    with open(path, encoding="utf-8-sig") as fh:
-        data = json.load(fh)
-    if not isinstance(data, dict) or not data.get("language"):
-        out("not stored: the file needs a \"language\" key and the translated messages")
+    """Stores a translation for the app's current language in the user's own file (kept over plugin updates)."""
+    locale = app_locale()
+    if not locale:
+        out("not stored: the Claude desktop app's language is English or cannot be read, so notices stay English")
         return 1
-    old = dict(translations())
-    stored = {"language": data["language"]}
-    stored.update({n: old[n] for n in MESSAGES if valid_translation(n, old.get(n))} if old.get("language") == data["language"] else {})
+    data = load_translation(path)
+    stored = {n: t for n, t in load_translation(translation_file(locale)).items() if valid_translation(n, t)}
     bad = []
     for name in MESSAGES:
         if name in data:
@@ -338,12 +373,14 @@ def set_messages(path):
                 stored[name] = data[name]
             else:
                 bad.append(name)
-    os.makedirs(os.path.dirname(messages_path()), exist_ok=True)
-    with open(messages_path(), "w", encoding="utf-8") as fh:
+    os.makedirs(OWN_MESSAGES, exist_ok=True)
+    with open(translation_file(locale), "w", encoding="utf-8") as fh:
         json.dump(stored, fh, ensure_ascii=False, indent=1)
         fh.write("\n")
-    left = [n for n in MESSAGES if n not in stored]
-    out("stored %d notices in %s (%s)%s%s" % (len(stored) - 1, data["language"], messages_path(),
+    global _translated
+    _translated = None
+    _, left = missing_translations()
+    out("stored %d notices for locale %s (%s)%s%s" % (len(stored), locale, translation_file(locale),
         "; rejected (placeholders changed): " + ", ".join(bad) if bad else "",
         "; still English: " + ", ".join(left) if left else ""))
     return 0
@@ -1080,11 +1117,10 @@ def start_context(root):
             parts.append("WARNING: the session-guard markers in ~/.claude/CLAUDE.md are damaged, so the general rules "
                          "were not refreshed. Tell the user; the setup (skill session-guard:setup) repairs it.")
         refresh_statusline()
-    missing = missing_translations()
-    if missing:
-        parts.append("Session Guard notices without a translation into %s (a newer version added them): %s. Translate "
-                     "them now, as the setup skill says (--print-messages, --set-messages), without mentioning it." % (
-                         translations()["language"], ", ".join(missing)))
+    locale, missing = missing_translations()
+    if missing and len(missing) < len(MESSAGES):  # a newer version added notices; a new language is the user's call
+        parts.append("Session Guard notices without a translation for the app language %s: %s. Translate them now, as "
+                     "the setup skill says (\"Notices\"), without mentioning it." % (locale, ", ".join(missing)))
     # A worktree gets the files from its main checkout through git, never a second, diverging copy.
     made = create_project_files(root) if root and main_checkout(root) == root else []
     if made:
@@ -1494,7 +1530,10 @@ def cli(args):
         out(RULES + "\n\n" + BLOCK_BEGIN + "\n" + GENERAL_RULES + "\n" + BLOCK_END)
         return 0
     if args[0] == "--print-messages":
-        out(json.dumps(dict({"language": "<the language the user speaks with Claude>"}, **MESSAGES), ensure_ascii=False, indent=1))
+        locale, missing = missing_translations()
+        out("app language: %s; notices without a translation: %s" % (locale or "English (nothing to translate)",
+                                                                        ", ".join(missing) if missing else "none"))
+        out(json.dumps(MESSAGES, ensure_ascii=False, indent=1))
         return 0
     if args[0] == "--set-messages":
         return set_messages(args[1]) if len(args) > 1 else 2
