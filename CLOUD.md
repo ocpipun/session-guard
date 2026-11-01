@@ -32,7 +32,9 @@ Every change goes into the repository. Everything happens in this session; no se
       - If GitHub rejects the push (branch protection), push the session branch and tell the user to open the pull
         request with "Create PR" and merge it; until it is merged, new sessions do not have Session Guard.
 6. Last message, in the user's language: Session Guard is installed for this repository and runs in this session
-   from the next message on (it brings its rules and STATUS.md then), and in every new session of it. Other
+   from the next message on (it brings its rules and STATUS.md then, unless this session already had them from an
+   earlier install: an update adds nothing visible, since a plain message gets nothing from Session Guard), and in
+   every new session of it. Other
    sessions that were already open stay unprotected. There is no quota protection in the cloud.
 
 To update later: the same steps again.
