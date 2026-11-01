@@ -768,5 +768,16 @@ class Guard(unittest.TestCase):
         self.assertIn("cloud project", json.loads(r.stdout)["reason"])
 
 
+    def test_cloud_update_replaces_old_hooks(self):
+        old = 'python3 -I "$CLAUDE_PROJECT_DIR/.claude/session-guard/session_guard.py" --project'
+        repo = self.project("repo", {".claude/settings.json": json.dumps({"hooks": {
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": old}]}, {"hooks": [{"type": "command", "command": "echo mine"}]}]}})})
+        subprocess.run([sys.executable, "-I", SETUP, "--reviewed", repo], capture_output=True, env=self.env, check=True)
+        commands = [h["command"] for g in json.loads(self.read(repo, ".claude", "settings.json"))["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+        self.assertNotIn(old, commands)
+        self.assertIn("echo mine", commands)
+        self.assertEqual(len(commands), 3)  # guard + 24-hour watch + the user's own
+
+
 if __name__ == "__main__":
     unittest.main()

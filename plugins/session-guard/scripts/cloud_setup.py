@@ -86,6 +86,15 @@ def main():
             settings = json.load(fh)  # a broken file stops here instead of being overwritten
     hooks = settings.setdefault("hooks", {})
     added = []
+    # An update replaces older Session Guard hooks (their command may differ) instead of adding a second set.
+    wanted = {h["command"] for _, _, h in HOOKS}
+    for event in list(hooks):
+        groups = hooks[event] if isinstance(hooks[event], list) else []
+        for g in groups:
+            if isinstance(g, dict) and isinstance(g.get("hooks"), list):
+                g["hooks"] = [h for h in g["hooks"] if not (isinstance(h, dict) and ".claude/session-guard/session_guard.py"
+                              in str(h.get("command")) and h.get("command") not in wanted)]
+        hooks[event] = [g for g in groups if not (isinstance(g, dict) and g.get("hooks") == [])]
     for event, matcher, hook in HOOKS:
         groups = hooks.setdefault(event, [])
         present = any(h.get("command") == hook["command"] for g in groups for h in g.get("hooks", []))
