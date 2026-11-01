@@ -28,6 +28,7 @@ class Guard(unittest.TestCase):
         self.home = tempfile.mkdtemp()
         self.env = dict(os.environ, HOME=self.home, USERPROFILE=self.home)
         self.env.pop("CLAUDE_PROJECT_DIR", None)  # tests run inside Claude Code: never touch the real project
+        self.env.pop("CLAUDE_CODE_ENTRYPOINT", None)  # quota readings are asked for in the desktop app only
         self.cli("--setup", "approved")
 
     def cli(self, *args, script=SCRIPT):
@@ -61,9 +62,18 @@ class Guard(unittest.TestCase):
                 fh.write(json.dumps(entry) + "\n")
         return path
 
-    def run_hook(self, event, sid, transcript="none.jsonl", prompt="", args=(), cwd=None):
-        data = {"hook_event_name": event, "session_id": sid, "transcript_path": transcript,
-                "prompt": prompt, "cwd": cwd or self.home, "source": "startup"}
+    def started(self, sid, rules=True):
+        """The start marker SessionStart writes; without it a prompt meets the restart lock."""
+        folder = os.path.join(self.home, ".claude", "session_guard", "started")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, sid), "w") as fh:
+            json.dump({"self": SCRIPT, "rules": rules}, fh)
+
+    def run_hook(self, event, sid, transcript="none.jsonl", prompt="", args=(), cwd=None, fresh=False, source="startup", **extra):
+        if event != "SessionStart" and not fresh and not os.path.exists(os.path.join(self.home, ".claude", "session_guard", "started", sid)):
+            self.started(sid)
+        data = dict({"hook_event_name": event, "session_id": sid, "transcript_path": transcript,
+                     "prompt": prompt, "cwd": cwd or self.home, "source": source}, **extra)
         out = subprocess.run([sys.executable, "-I", SCRIPT, *args], input=json.dumps(data).encode(),
                              capture_output=True, env=self.env).stdout.decode()
         return json.loads(out) if out else {}
@@ -155,6 +165,7 @@ class Guard(unittest.TestCase):
     # --- 24-hour watch (async hook, shortened to seconds) -------------------
     def watch_proc(self, transcript, seconds):
         env = dict(self.env, SESSION_GUARD_WATCH_SECONDS=str(seconds))
+        self.started("w1")
         data = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "w1", "transcript_path": transcript,
                            "cwd": self.home, "prompt": "go"}).encode()
         proc = subprocess.Popen([sys.executable, "-I", SCRIPT, "--watch"], stdin=subprocess.PIPE,
@@ -229,7 +240,7 @@ class Guard(unittest.TestCase):
                 json.dump({"locked": locked}, fh)
             os.utime(path, (old, old))
         self.run_hook("SessionStart", "s1")
-        self.assertEqual(sorted(os.listdir(folder)), ["closed.json", "config"])
+        self.assertEqual(sorted(os.listdir(folder)), ["closed.json", "config", "started"])
 
     # --- finish session and reopened conversations ------------------------
     def test_finish_session_locks(self):
@@ -269,15 +280,17 @@ class Guard(unittest.TestCase):
     def test_inactive_until_setup(self):
         os.remove(os.path.join(self.home, ".claude", "session_guard", "config", "setup.json"))
         start = self.run_hook("SessionStart", "s1")
-        self.assertIn("INACTIVE", self.context(start))
+        self.assertIn("SETUP PENDING", self.context(start))
         self.assertNotIn("Reply style", self.context(start))
-        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 410_000), "go"), {})
+        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 410_000), "go")
+        self.assertNotIn("decision", r)  # nothing enforced, but the setup is asked for again
+        self.assertIn("SETUP PENDING", self.context(r))
 
     def test_old_rules_version_needs_setup_again(self):
         path = os.path.join(self.home, ".claude", "session_guard", "config", "setup.json")
         with open(path, "w") as fh:
             json.dump({"rules": 1, "global": "approved", "projects": {}}, fh)
-        self.assertIn("INACTIVE", self.context(self.run_hook("SessionStart", "s1")))
+        self.assertIn("SETUP PENDING", self.context(self.run_hook("SessionStart", "s1")))
 
     def test_declined_is_off(self):
         self.cli("--setup", "declined")
@@ -286,7 +299,7 @@ class Guard(unittest.TestCase):
 
     def test_project_with_rules_needs_review_then_works(self):
         root = self.project(files={"CLAUDE.md": "# Old\n- Hand off at 250k tokens.\n"})
-        self.assertIn("INACTIVE in this project", self.context(self.run_hook("SessionStart", "s1", cwd=root)))
+        self.assertIn("PROJECT REVIEW PENDING", self.context(self.run_hook("SessionStart", "s1", cwd=root)))
         self.assertFalse(os.path.exists(os.path.join(root, "docs")))
         self.assertIn("Hand off at 250k", self.cli("--scan", root))
         self.cli("--setup", "approved", root)
@@ -395,22 +408,31 @@ class Guard(unittest.TestCase):
         self.assertIn("Reply style", self.context(self.run_hook("SessionStart", "s1", cwd=root)))
 
     # --- cloud copy -------------------------------------------------------
-    def test_cloud_setup_refuses_unreviewed_repo(self):
+    def test_cloud_install_then_review_in_next_session(self):
         repo = self.project("repo", {"CLAUDE.md": "old rules"})
-        r = subprocess.run([sys.executable, "-I", SETUP, repo], capture_output=True, env=self.env)
-        self.assertEqual(r.returncode, 1)
-        self.assertFalse(os.path.exists(os.path.join(repo, ".claude")))
-
-    def test_cloud_install_after_review_in_cloud(self):
-        repo = self.project("repo", {"CLAUDE.md": "reviewed rules"})
         shutil.rmtree(os.path.join(self.home, ".claude"))  # a cloud machine: no plugin, no setup record
-        subprocess.run([sys.executable, "-I", SETUP, "--reviewed", repo], capture_output=True, env=self.env, check=True)
-        self.assertEqual(self.read(repo, "CLAUDE.md"), "reviewed rules")
+        subprocess.run([sys.executable, "-I", SETUP, repo], capture_output=True, env=self.env, check=True)
+        self.assertEqual(self.read(repo, "CLAUDE.md"), "old rules")
+        self.assertFalse(os.path.exists(os.path.join(repo, "docs")))
         cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
         data = json.dumps({"hook_event_name": "SessionStart", "session_id": "s", "source": "startup"}).encode()
         copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
         r = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
+        self.assertIn("PROJECT REVIEW PENDING", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+        subprocess.run([sys.executable, "-I", copy, "--project", "--setup", "approved", repo], capture_output=True, env=cloud)
+        r = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
         self.assertIn("Reply style", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+        self.assertTrue(os.path.exists(os.path.join(repo, "docs", "STATUS.md")))
+
+    def test_cloud_installing_session_is_restart_locked(self):
+        repo = self.project("repo")
+        subprocess.run([sys.executable, "-I", SETUP, repo], capture_output=True, env=self.env, check=True)
+        shutil.rmtree(os.path.join(self.home, ".claude"))
+        cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
+        data = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "old", "prompt": "next"}).encode()
+        copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
+        r = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
+        self.assertIn("Open a new session", json.loads(r.stdout)["reason"])
 
     def test_cloud_setup_is_idempotent_and_quiet_with_plugin(self):
         repo = self.project("repo", {".claude/settings.json": json.dumps({"permissions": {"allow": ["Bash(ls)"]}})})
@@ -421,7 +443,6 @@ class Guard(unittest.TestCase):
         self.assertEqual(settings["permissions"]["allow"], ["Bash(ls)"])
         self.assertEqual(len(settings["hooks"]["UserPromptSubmit"]), 2)  # guard + 24-hour watch
         self.assertIn("name: session-guard-setup", self.read(repo, ".claude", "skills", "session-guard-setup", "SKILL.md"))
-        self.assertTrue(os.path.exists(os.path.join(repo, "docs", "STATUS_ARCHIVE.md")))
         copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
         cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
         shutil.rmtree(os.path.join(self.home, ".claude", "session_guard"))  # the cloud has no setup.json of the user
@@ -429,6 +450,7 @@ class Guard(unittest.TestCase):
         alone = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
         ctx = json.loads(alone.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("Session Guard general rules", ctx)  # no global CLAUDE.md in the cloud
+        self.assertTrue(os.path.exists(os.path.join(repo, "docs", "STATUS_ARCHIVE.md")))  # nothing to review
         os.makedirs(os.path.join(self.home, ".claude", "plugins", "cache", "sg", "scripts"))
         shutil.copyfile(SCRIPT, os.path.join(self.home, ".claude", "plugins", "cache", "sg", "scripts", "session_guard.py"))
         quiet = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
@@ -448,6 +470,167 @@ class Guard(unittest.TestCase):
         self.cli("--project", "--setup", "approved", changed)
         r = subprocess.run([sys.executable, "-I", SCRIPT, "--project"], input=data, capture_output=True, env=cloud)
         self.assertIn("Reply style", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    # --- v1.2: break 100k, restart lock, late rules, lock types --------------
+    def test_break_at_110k_hands_off(self):
+        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 110_000, minutes_ago=90), "do it")
+        self.assertIn("BREAK RULE", self.context(r))
+
+    def test_session_started_before_install_is_restart_locked(self):
+        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi", fresh=True)
+        self.assertEqual(r["decision"], "block")
+        self.assertIn("Fully quit Claude", r["reason"])
+        self.run_hook("SessionStart", "s1", source="resume")  # the app was restarted: the session is resumed
+        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi")
+        self.assertNotIn("decision", r)
+        self.assertIn("Reply style", self.context(r))  # it never got the rules: given once now
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "again"), {})
+
+    def test_restart_lock_even_before_setup(self):
+        os.remove(os.path.join(self.home, ".claude", "session_guard", "config", "setup.json"))
+        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi", fresh=True)
+        self.assertEqual(r["decision"], "block")
+
+    def test_resumed_session_with_rules_gets_nothing_again(self):
+        self.run_hook("SessionStart", "s1")
+        self.run_hook("SessionStart", "s1", source="resume")
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi"), {})
+
+    def test_setup_takes_effect_at_once_in_open_sessions(self):
+        os.remove(os.path.join(self.home, ".claude", "session_guard", "config", "setup.json"))
+        self.run_hook("SessionStart", "s1")
+        self.run_hook("SessionStart", "s2")
+        self.cli("--setup", "approved")
+        for sid in ("s1", "s2"):
+            r = self.run_hook("UserPromptSubmit", sid, self.transcript(sid, 50_000, msg_ids=(sid,)), "next")
+            self.assertIn("Reply style", self.context(r))
+
+    def test_old_lock_record_is_migrated(self):
+        folder = os.path.join(self.home, ".claude", "session_guard")
+        with open(os.path.join(folder, "s1.json"), "w") as fh:
+            json.dump({"locked": True, "reason": "finish session", "ids": ["msg_a"]}, fh)
+        r = self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi")
+        self.assertIn("finish session", r["reason"])
+        with open(os.path.join(folder, "s1.json")) as fh:
+            self.assertIn("finish", json.load(fh)["locks"])
+
+    # --- Session Follow (quota) ----------------------------------------------
+    def follow(self, name, percent, resets_in, read_ago=0):
+        folder = os.path.join(self.home, ".claude", "session_guard", "session_follow")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, name + ".json"), "w") as fh:
+            json.dump({"used_percent": percent, "resets_at": time.time() + resets_in,
+                       "read_at": time.time() - read_ago, "source": "test"}, fh)
+
+    def test_quota_stop_then_lock_then_reset(self):
+        self.follow("five_hour", 91, 2 * 3600)
+        t = self.transcript("t", 50_000)
+        r = self.run_hook("UserPromptSubmit", "s1", t, "next task")
+        self.assertIn("QUOTA STOP", self.context(r))
+        blocked = self.run_hook("UserPromptSubmit", "s1", t, "hi")
+        self.assertEqual(blocked["decision"], "block")
+        self.assertIn("quota 91% (5-hour)", blocked["reason"])
+        self.follow("five_hour", 3, 5 * 3600)  # a newer, lower reading: the window reset
+        self.assertNotIn("decision", self.run_hook("UserPromptSubmit", "s1", t, "hi"))
+
+    def test_quota_lock_never_clears_finish_lock(self):
+        self.follow("weekly", 99, 3 * 3600)
+        t = self.transcript("t", 50_000)
+        self.run_hook("UserPromptSubmit", "s1", t, "go")
+        self.follow("weekly", 2, 7 * 86400)
+        self.run_hook("UserPromptSubmit", "s1", t, "finish session")
+        self.assertIn("finish session", self.run_hook("UserPromptSubmit", "s1", t, "hi")["reason"])
+
+    def test_quota_near_reset_does_not_stop(self):
+        self.follow("five_hour", 95, 30 * 60)
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "go"), {})
+
+    def test_new_session_over_quota_is_locked_at_once(self):
+        self.follow("five_hour", 92, 2 * 3600)
+        root = self.project("fresh")
+        r = self.run_hook("SessionStart", "s1", cwd=root)
+        self.assertIn("QUOTA LOCK", self.context(r))
+        self.assertEqual(os.listdir(root), [])  # no review, no files
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", self.transcript("t", 50_000), "hi", cwd=root)["decision"], "block")
+
+    def test_quota_turn_stopped_after_grace(self):
+        self.follow("five_hour", 93, 2 * 3600)
+        t = self.transcript("t", 50_000)
+        self.assertIn("QUOTA STOP", self.context(self.run_hook("PostToolUse", "s1", t)))
+        self.assertEqual(self.run_hook("PostToolUse", "s1", t), {})  # within the 15 minutes
+        path = os.path.join(self.home, ".claude", "session_guard", "s1.json")
+        with open(path) as fh:
+            state = json.load(fh)
+        state["locks"]["quota"]["at"] -= 16 * 60
+        with open(path, "w") as fh:
+            json.dump(state, fh)
+        self.assertIs(self.run_hook("PostToolUse", "s1", t)["continue"], False)
+
+    def test_desktop_usage_tool_result_is_read(self):
+        result = {"plan": {"status": "ok", "windows": [
+            {"label": "5-hour limit", "percentUsed": 12, "resetsAt": "2099-01-01T09:10:00.934Z"},
+            {"label": "Weekly · all models", "percentUsed": 58, "resetsAt": "2099-01-03T00:00:00.934Z"},
+            {"label": "Weekly · Opus", "percentUsed": 99, "resetsAt": "2099-01-03T00:00:00.934Z"}]}}
+        self.run_hook("PostToolUse", "s1", self.transcript("t", 50_000), tool_name="mcp__ccd_session_mgmt__get_usage",
+                      tool_response=[{"type": "text", "text": json.dumps(result)}])
+        folder = os.path.join(self.home, ".claude", "session_guard", "session_follow")
+        with open(os.path.join(folder, "weekly.json")) as fh:
+            self.assertEqual(json.load(fh)["used_percent"], 58)
+        with open(os.path.join(folder, "five_hour.json")) as fh:
+            self.assertEqual(json.load(fh)["source"], "desktop")
+
+    def test_desktop_asks_for_reading_when_old(self):
+        self.env["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop"
+        t = self.transcript("t", 50_000)
+        self.assertIn("QUOTA READING", self.context(self.run_hook("UserPromptSubmit", "s1", t, "go")))
+        self.follow("five_hour", 40, 3 * 3600)
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", t, "go"), {})
+        self.follow("five_hour", 87, 3 * 3600)  # high: every prompt
+        self.assertIn("QUOTA READING", self.context(self.run_hook("UserPromptSubmit", "s1", t, "go")))
+        self.env.pop("CLAUDE_CODE_ENTRYPOINT")
+        self.assertEqual(self.run_hook("UserPromptSubmit", "s1", t, "go"), {})  # terminal: the status line reads it
+
+    # --- status line ----------------------------------------------------------
+    def test_statusline_wraps_and_restores_original(self):
+        path = os.path.join(self.home, ".claude", "settings.json")
+        original = {"type": "command", "command": "echo other-tool"}
+        with open(path, "w") as fh:
+            json.dump({"statusLine": original, "model": "x"}, fh)
+        self.assertIn("wrapped", self.cli("--install-statusline"))
+        self.assertIn("already", self.cli("--install-statusline"))
+        with open(path) as fh:
+            settings = json.load(fh)
+        self.assertIn("session-guard-statusline", settings["statusLine"]["command"])
+        self.assertEqual(settings["model"], "x")
+        data = {"rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": time.time() + 3600},
+                                "seven_day": {"used_percentage": 41, "resets_at": time.time() + 86400}}}
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--statusline"], input=json.dumps(data).encode(),
+                           capture_output=True, env=self.env)
+        self.assertIn(b"other-tool", r.stdout)
+        with open(os.path.join(self.home, ".claude", "session_guard", "session_follow", "weekly.json")) as fh:
+            self.assertEqual(json.load(fh)["used_percent"], 41)
+        self.assertIn("restored", self.cli("--uninstall-statusline"))
+        with open(path) as fh:
+            self.assertEqual(json.load(fh)["statusLine"], original)
+
+    def test_statusline_alone_shows_quota(self):
+        self.cli("--install-statusline")
+        data = {"rate_limits": {"five_hour": {"used_percentage": 7, "resets_at": time.time() + 3600}}}
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--statusline"], input=json.dumps(data).encode(),
+                           capture_output=True, env=self.env)
+        self.assertIn(b"5-hour 7%", r.stdout)
+        self.assertIn("removed", self.cli("--uninstall-statusline"))
+
+    # --- similar files (item 8) -----------------------------------------------
+    def test_similar_files_need_review(self):
+        root = self.project("agents", {"AGENTS.md": "- keep notes", "HANDOFF.md": "where we stopped", "app.py": "x"})
+        self.assertIn("PROJECT REVIEW PENDING", self.context(self.run_hook("SessionStart", "s1", cwd=root)))
+        report = self.cli("--scan", root)
+        self.assertIn("AGENTS.md  [same job", report)
+        self.assertIn("HANDOFF.md  [same job", report)
+        self.assertNotIn("app.py", report)
+        self.assertIn("docs/STATUS.md", self.cli("--create-files", root))
+        self.assertTrue(os.path.exists(os.path.join(root, "docs", "STATUS_ARCHIVE.md")))
 
 
 if __name__ == "__main__":

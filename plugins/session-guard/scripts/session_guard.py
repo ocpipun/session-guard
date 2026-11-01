@@ -1,4 +1,4 @@
-"""Session Guard: Claude Code hook script (SessionStart, UserPromptSubmit, PostToolUse).
+"""Session Guard: Claude Code hook script (SessionStart, UserPromptSubmit, PostToolUse) and status line.
 
 Claude cannot see its own context size or how long the user was away. This
 script measures both from the session transcript and tells Claude
@@ -11,7 +11,12 @@ script measures both from the session transcript and tells Claude
   thresholds, recent message ids). When the app reopens a conversation under a
   new session id, the state is found again through the shared message ids.
 - A locked session never passes a prompt to Claude (decision: block), so it
-  costs nothing.
+  costs nothing. Lock types: context, finish, break (permanent), quota (until
+  the reset), restart (a session started before this install or update).
+- Session Follow: the 5-hour and weekly quota, shared by all local sessions in
+  ~/.claude/session_guard/session_follow/. Read from the terminal status line
+  (zero tokens) or, in the desktop app, from the usage tool Claude is asked to
+  call. Past 90% / 98% with the reset 45+ minutes away the session stops.
 - Setup gate: Session Guard stays inactive until the user approved removing the
   rules, skills, scripts and hooks that conflict with it (skill setup). The
   approval is kept in ~/.claude/session_guard/config/setup.json (plugin) or in
@@ -31,6 +36,10 @@ Other modes:
     session_guard.py --install-global         writes the general rules block
     session_guard.py --setup approved|declined [--all | project_dir...]
     session_guard.py --print-rules            the rules a review compares with
+    session_guard.py --create-files [project_dir]  the missing project files, now
+    session_guard.py --install-statusline     signed terminal status line (quota
+    session_guard.py --uninstall-statusline   readings); restores a wrapped one
+    session_guard.py --statusline             the status line command itself
     session_guard.py --project                project-copy mode (cloud); does
                                               nothing when the plugin is installed
 On any error the hook exits 0 silently: it must never break the user's work.
@@ -45,7 +54,7 @@ import time
 from datetime import datetime
 
 K = 1000
-NORMAL_LIMIT, LONG_LIMIT, BREAK_CONTEXT, BREAK_SECONDS = 400 * K, 900 * K, 125 * K, 3600
+NORMAL_LIMIT, LONG_LIMIT, BREAK_CONTEXT, BREAK_SECONDS = 400 * K, 900 * K, 100 * K, 3600
 HOME = os.path.expanduser("~")
 CLAUDE_DIR = os.path.join(HOME, ".claude")
 GLOBAL_MD = os.path.join(CLAUDE_DIR, "CLAUDE.md")
@@ -55,7 +64,7 @@ TAIL_BYTES = 4 * 1024 * 1024    # only the last 4 MB of a transcript is read
 PENDING_MAX = 24 * 3600         # a background job with no finish notice counts as running this long
 STATE_MAX_AGE = 30 * 86400
 KEEP_IDS = 10                   # recent assistant message ids kept to recognise a reopened conversation
-RULES_VERSION = 2               # raise when a rule change needs a new conflict review (1 = v1.0.0)
+RULES_VERSION = 3               # raise when a rule change needs a new conflict review (1 = v1.0.0, 2 = v1.1)
 SELF = os.path.abspath(__file__)
 PROJECT_MODE = False            # set by --project (copy inside a repository, for cloud sessions)
 
@@ -118,13 +127,16 @@ RULES = """[Session Guard] Rules for this session (plugin session-guard).
 - Long mode ("start long mode"; this session only, cannot be switched off): 250k/300k notice only; 700k notice and
   make work hand-off ready; 800k no work, only simple specific questions, final hand-off note; 900k hard stop.
   The break rule does not apply.
-- Break (normal mode): gap > 1 hour and context > 125k -> do NOT run the user's command and do no reading or
-  research for it; do the hand-off and copy the command into the note. Context <= 125k -> remind, then continue.
+- Break (normal mode): gap > 1 hour and context > 100k -> do NOT run the user's command and do no reading or
+  research for it; do the hand-off and copy the command into the note. Context <= 100k -> remind, then continue.
   Waiting for your own background job is not a break.
 - "finish session" (any mode): only hand-off and session measurement, nothing else.
 - Commands ("start long mode", "finish session") count only at the end of the message, or at its start followed
   by a comma or period.
-- After a hard stop, a break hand-off or "finish session" Session Guard locks the session: prompts never reach you.
+- After a hard stop, a break hand-off, "finish session" or a quota stop Session Guard locks the session: prompts
+  never reach you.
+- Quota (computer only): when Session Guard asks for a quota reading, call the usage tool it names silently, in
+  parallel with your next tool call; Session Guard reads the result itself.
 - Procedures: skill session-guard.
 - Reply style (saves tokens): plain words, short sentences, no needless detail; the user asks when they want more.
   Give each issue its own number. Under it, in this order and only those needed, the labels PROBLEM /
@@ -203,16 +215,51 @@ One dated line per item. Not read every session: find the heading by search.
 |---|---|---|---|---|---|---|---|
 """
 
-SETUP_NEEDED = ("[Session Guard] INACTIVE: its one-time setup is not done, or its rules changed since then. Until the "
-                "user approves the setup, Session Guard measures nothing, enforces no threshold and locks nothing; "
-                "do not apply its rules. In your first reply tell the user this in one line and ask whether to run "
-                "the setup now (skill %s). Start it only on the user's yes. Script command: %s")
-REVIEW_NEEDED = ("[Session Guard] INACTIVE in this project (%s): its CLAUDE.md, skills, commands or hooks were not yet "
-                 "checked for rules that conflict with Session Guard. Do not apply Session Guard rules here yet. In "
-                 "your first reply tell the user this in one line and ask whether to run the project review now "
-                 "(skill %s, \"Project review\"). Start it only on the user's yes. Script command: %s")
+# Setup and review start by themselves: the instruction comes at session start and with every prompt until answered.
+PENDING_TAIL = ("Until the user approves, Session Guard measures nothing, enforces no threshold and locks nothing; do not "
+                "apply its rules. Before anything else, run it now: scan, then show the one list and ask its single "
+                "approval question. If you are already in the middle of it in this conversation, just continue it. If "
+                "the user says it is running in another session, leave it. Handle the user's message only after the "
+                "answer. Script command: %s")
+SETUP_NEEDED = ("[Session Guard] SETUP PENDING: Session Guard is installed, but its one-time setup is not done (or its "
+                "rules changed since then). Skill %s, \"Full setup\". " + PENDING_TAIL)
+REVIEW_NEEDED = ("[Session Guard] PROJECT REVIEW PENDING (%s): this project's CLAUDE.md, similar files, skills, commands "
+                 "or hooks were not yet checked against Session Guard. Skill %s, \"Project review\". " + PENDING_TAIL)
 DECLINED = ("[Session Guard] OFF%s: the user kept rules that conflict with it. Do not apply Session Guard rules. "
             "If the user asks, the review can be run again (skill %s).")
+
+# --- locks -----------------------------------------------------------------
+# Each type is kept on its own in state["locks"]; clearing one never clears another. "context", "finish" and
+# "break" are permanent. "quota" clears when its window resets (or a lower reading arrives). "restart" is not
+# stored: it holds while the session has no start marker of this script (see started()).
+RESTART_PLUGIN = ("Session Guard: this session started before Session Guard was installed or updated, so it is not "
+                  "protected. Your message was not sent. Fully quit Claude (tray included) and reopen it, then continue here.")
+RESTART_PROJECT = ("Session Guard: this session started before Session Guard was installed in this repository, so it is "
+                   "not protected. Your message was not sent. Open a new session of this repository and continue there.")
+
+# --- Session Follow (quota) ---------------------------------------------------
+# One file per window, shared by every local session (the quota is per account). After its reset a file is
+# emptied and later overwritten, never deleted. Not offered in the cloud: no hook can read the quota there.
+FOLLOW_DIR = os.path.join(STATE_DIR, "session_follow")
+WINDOWS = (("five_hour", "5-hour"), ("weekly", "weekly"))
+ASK_AT = {"five_hour": 85, "weekly": 95}      # from here on: a reading with every prompt
+STOP_AT = {"five_hour": 90, "weekly": 98}     # QUOTA STOP, then the quota lock
+READING_MAX_AGE = 20 * 60
+ASK_STEP = 5 * 60                             # during work: at most one reading request per 5 minutes
+RESET_MARGIN = 45 * 60                        # a reset closer than this: no stop, work goes on
+QUOTA_GRACE = 15 * 60                         # time to reach a hand-over-ready state before the turn is stopped
+USAGE_TOOL = "mcp__ccd_session_mgmt__get_usage"
+READ_USAGE = ("[Session Guard] QUOTA READING: call the tool %s once now (no arguments), in parallel with your next "
+              "tool call; if it is not loaded, load it with ToolSearch \"select:%s\". Session Guard reads the result "
+              "itself; do not mention it to the user." % (USAGE_TOOL, USAGE_TOOL))
+QUOTA_STOP = ("QUOTA STOP (%s quota %d%%, resets at %s). Start no new task, the user's message included if it is one. "
+              "Bring the current work to a hand-over-ready state within 15 minutes. Write only one line into "
+              "docs/STATUS.md: \"Stopped at: <which operation>, <in which state>\"; no hand-off note. Tell the user in "
+              "one line. After 15 minutes the turn is stopped; prompts are blocked until the reset.")
+
+# --- status line (terminal) -----------------------------------------------------
+SETTINGS = os.path.join(CLAUDE_DIR, "settings.json")
+STATUSLINE_SIGN = "session-guard-statusline"  # a status line command with this mark is Session Guard's own
 
 
 def normalize(text):
@@ -322,12 +369,286 @@ def load_state(sid, ids):
 
 
 def fix_state(state):
-    """Fills missing keys, so a damaged or older state file never silences the guard."""
+    """Fills missing keys, so a damaged or older state file never silences the guard. A v1.1 "locked" record
+    becomes the matching lock type."""
     if not isinstance(state, dict):
         state = {}
-    for key, value in (("long", False), ("locked", False), ("notified", []), ("ids", [])):
+    for key, value in (("long", False), ("notified", []), ("ids", [])):
         state.setdefault(key, value)
+    if not isinstance(state.get("locks"), dict):
+        state["locks"] = {}
+    if state.pop("locked", False):
+        reason = state.get("reason") or ""
+        kind = "finish" if reason == "finish session" else "break" if reason.startswith("break") else "context"
+        state["locks"].setdefault(kind, {"reason": reason, "at": time.time()})
+    state.pop("reason", None)
     return state
+
+
+def lock(state, kind, reason, **extra):
+    state["locks"][kind] = dict(extra, reason=reason, at=time.time())
+
+
+def closed(state):
+    """The permanent lock's reason, or None."""
+    for kind in ("context", "finish", "break"):
+        if kind in state["locks"]:
+            return state["locks"][kind].get("reason") or kind
+    return None
+
+
+def safe_name(sid):
+    return re.sub(r"[^A-Za-z0-9-]", "_", sid or "none")
+
+
+def started(sid):
+    """The start marker SessionStart wrote for this session with this script ({"self", "rules"}), or None: then
+    the session started before this install or update (restart lock)."""
+    try:
+        with open(os.path.join(STATE_DIR, "started", safe_name(sid)), encoding="utf-8") as fh:
+            mark = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return mark if isinstance(mark, dict) and mark.get("self") == SELF else None
+
+
+def mark_started(sid, rules):
+    """rules: whether this session got the Session Guard rules; if not, its next active prompt gets them."""
+    path = os.path.join(STATE_DIR, "started", safe_name(sid))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"self": SELF, "rules": rules}, fh)
+
+
+def old_rules_flag(sid):
+    try:
+        with open(os.path.join(STATE_DIR, "started", safe_name(sid)), encoding="utf-8") as fh:
+            return bool(json.load(fh).get("rules"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+# --- Session Follow -------------------------------------------------------------
+def follow_path(name):
+    return os.path.join(FOLLOW_DIR, name + ".json")
+
+
+def readings():
+    """{window: {used_percent, resets_at, read_at, source}} of the windows with a current reading."""
+    found = {}
+    for name, _ in WINDOWS:
+        try:
+            with open(follow_path(name), encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or not data:
+            continue
+        if not isinstance(data.get("resets_at"), (int, float)) or data["resets_at"] <= time.time():
+            write_follow(name, {})  # the window reset: the old number no longer holds
+            continue
+        found[name] = data
+    return found
+
+
+def write_follow(name, data):
+    os.makedirs(FOLLOW_DIR, exist_ok=True)
+    with open(follow_path(name), "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+
+
+def save_reading(name, percent, resets, source):
+    if isinstance(resets, str):
+        resets = to_time(resets)
+    if not isinstance(percent, (int, float)) or not isinstance(resets, (int, float)):
+        return
+    if resets > 1e11:  # milliseconds
+        resets /= 1000.0
+    write_follow(name, {"used_percent": float(percent), "resets_at": float(resets), "read_at": time.time(), "source": source})
+
+
+def usage_windows(obj, depth=0):
+    """The plan.windows list of a usage tool result, wherever the response wraps it (text blocks, JSON text)."""
+    if depth > 6:
+        return None
+    if isinstance(obj, str):
+        try:
+            return usage_windows(json.loads(obj), depth + 1)
+        except ValueError:
+            return None
+    if isinstance(obj, dict):
+        if isinstance(obj.get("windows"), list):
+            return obj["windows"]
+        obj = list(obj.values())
+    if isinstance(obj, list):
+        for item in obj:
+            found = usage_windows(item, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def take_usage(response):
+    """Saves the 5-hour and weekly (all models) readings of a desktop usage tool result."""
+    for win in usage_windows(response) or []:
+        if not isinstance(win, dict):
+            continue
+        label = str(win.get("label") or "").lower()
+        name = "five_hour" if label.startswith("5-hour") else "weekly" if "weekly" in label and "all models" in label else None
+        if name:
+            save_reading(name, win.get("percentUsed"), win.get("resetsAt"), "desktop")
+
+
+def quota_hit():
+    """(window, reading) past its stop threshold with the reset at least 45 minutes away, or None."""
+    for name, reading in sorted(readings().items()):
+        if reading.get("used_percent", 0) >= STOP_AT[name] and reading["resets_at"] - time.time() >= RESET_MARGIN:
+            return name, reading
+    return None
+
+
+def quota_cleared(info):
+    """A quota lock ends at its reset, or when a newer reading of its window is below the stop threshold."""
+    if time.time() >= info.get("resets_at", 0):
+        return True
+    reading = readings().get(info.get("window"))
+    return bool(reading and reading.get("read_at", 0) > info.get("at", 0) and reading.get("used_percent", 0) < STOP_AT[info["window"]])
+
+
+def clock(epoch):
+    return datetime.fromtimestamp(epoch).strftime("%H:%M" if epoch - time.time() < 20 * 3600 else "%a %H:%M")
+
+
+def quota_text(info):
+    return "Session Guard: quota %d%% (%s), resets at %s. Your message was not sent. Continue after that." % (
+        info.get("percent", 0), dict(WINDOWS).get(info.get("window"), "?"), clock(info.get("resets_at", 0)))
+
+
+def quota_lock(state, hit):
+    name, reading = hit
+    lock(state, "quota", "quota", window=name, percent=round(reading["used_percent"]), resets_at=reading["resets_at"])
+
+
+def needs_reading(state, during_work):
+    """Desktop app only (its status line does not run; the terminal's status line keeps the files fresh)."""
+    if PROJECT_MODE or os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop":
+        return False
+    found, now = readings(), time.time()
+    high = any(r.get("used_percent", 0) >= ASK_AT[n] for n, r in found.items())
+    newest = max([r.get("read_at", 0) for r in found.values()] or [0])
+    if not high and now - newest < READING_MAX_AGE:
+        return False
+    if during_work and now - state.get("asked_at", 0) < ASK_STEP:
+        return False
+    state["asked_at"] = now
+    return True
+
+
+# --- status line ------------------------------------------------------------------
+def python_cmd(path, args):
+    path = path.replace("\\", "/")
+    return ('if [ "$OS" = "Windows_NT" ]; then python -I "%s" %s; else python3 -I "%s" %s; fi' % (path, args, path, args))
+
+
+def statusline_command():
+    return python_cmd(SELF, "--statusline") + " # " + STATUSLINE_SIGN
+
+
+def load_settings():
+    """~/.claude/settings.json as a dict ({} when missing), or None when it cannot be parsed (never overwritten)."""
+    try:
+        with open(SETTINGS, encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def save_settings(data):
+    os.makedirs(CLAUDE_DIR, exist_ok=True)
+    with open(SETTINGS, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+
+
+def signed(entry):
+    return isinstance(entry, dict) and STATUSLINE_SIGN in str(entry.get("command") or "")
+
+
+def install_statusline():
+    """Writes Session Guard's signed status line. An older signed one is replaced; another tool's one is kept in
+    the setup record and run by ours, its output shown unchanged."""
+    settings = load_settings()
+    if settings is None:
+        return "settings.json cannot be read: not changed"
+    current = settings.get("statusLine")
+    if current and not signed(current):
+        cfg = load_config()
+        cfg["statusline_original"] = current
+        save_config(cfg)
+    entry = dict(current) if signed(current) else {"type": "command"}
+    entry["command"] = statusline_command()
+    if settings.get("statusLine") == entry:
+        return "already in place"
+    settings["statusLine"] = entry
+    save_settings(settings)
+    return "wrapped the existing status line" if current and not signed(current) else "installed"
+
+
+def uninstall_statusline():
+    settings = load_settings()
+    if settings is None:
+        return "settings.json cannot be read: not changed"
+    if not signed(settings.get("statusLine")):
+        return "no Session Guard status line"
+    cfg = load_config()
+    original = cfg.pop("statusline_original", None)
+    if original:
+        settings["statusLine"] = original
+    else:
+        settings.pop("statusLine", None)
+    save_settings(settings)
+    save_config(cfg)
+    return "restored the original status line" if original else "removed"
+
+
+def refresh_statusline():
+    """After a plugin update the script path changes: point the signed status line at this copy."""
+    settings = load_settings()
+    if settings and signed(settings.get("statusLine")) and settings["statusLine"].get("command") != statusline_command():
+        settings["statusLine"]["command"] = statusline_command()
+        save_settings(settings)
+
+
+def statusline():
+    """Terminal status line: saves the quota numbers Claude Code passes in (zero tokens), then shows the wrapped
+    original status line's output unchanged, or a short quota line of its own."""
+    raw = sys.stdin.buffer.read()
+    try:
+        limits = json.loads(raw.decode("utf-8", errors="replace") or "{}").get("rate_limits") or {}
+        for source, name in (("five_hour", "five_hour"), ("seven_day", "weekly")):
+            win = limits.get(source)
+            if isinstance(win, dict):
+                save_reading(name, win.get("used_percentage"), win.get("resets_at"), "statusline")
+    except Exception:
+        pass
+    original = load_config().get("statusline_original")
+    if isinstance(original, dict) and original.get("command"):
+        import subprocess
+        bash = shutil.which("bash")
+        try:
+            run = subprocess.run([bash, "-c", original["command"]] if bash else original["command"], shell=not bash,
+                                 input=raw, capture_output=True, timeout=10)
+            sys.stdout.buffer.write(run.stdout)
+        except Exception:
+            pass
+        return 0
+    found = readings()
+    out(" · ".join("%s %d%%" % (label, found[name]["used_percent"]) for name, label in WINDOWS if name in found)
+        or "Session Guard")
+    return 0
 
 
 def save_state(sid, state, ids):
@@ -458,7 +779,40 @@ def review_items(root, is_global=False):
                       if is_global or not n.startswith("session-guard")]
     items += [os.path.join(claude, n) for n in ("settings.json", "settings.local.json")
               if settings_hooks(os.path.join(claude, n))]
+    if not is_global:
+        items += similar_files(root)
     return items
+
+
+SIMILAR = ("AGENTS.md", "GEMINI.md", ".cursorrules", ".cursor/rules", ".windsurfrules", ".clinerules",
+           ".github/copilot-instructions.md", "CONTEXT.md", "MEMORY.md")
+SIMILAR_START = ("handoff", "hand-off", "hand_off", "notes", "todo", "progress")
+OWN_FILES = ("status.md", "status_archive.md")
+
+
+def similar_files(root):
+    """Files that do the job of CLAUDE.md / STATUS / ARCHIVE under another name (other tools' rule files, hand-off,
+    notes, to-do, progress or status files), in the project root and docs/. Read in full by the review."""
+    found = [exists_ci(root, n) for n in SIMILAR]
+    for folder in (root, os.path.join(root, "docs")):
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for n in names:
+            low, ext = n.lower(), os.path.splitext(n)[1].lower()
+            if ext not in ("", ".md", ".txt") or not os.path.isfile(os.path.join(folder, n)):
+                continue
+            if folder != root and low in OWN_FILES:
+                continue
+            if low.startswith(SIMILAR_START) or "status" in low:
+                found.append(os.path.join(folder, n))
+    seen, result = set(), []
+    for path in found:
+        if path and key(path) not in seen:
+            seen.add(key(path))
+            result.append(path)
+    return result
 
 
 def load_config():
@@ -532,16 +886,18 @@ def command():
     return '%s "%s"%s' % ("python" if os.name == "nt" else "python3", SELF, " --project" if PROJECT_MODE else "")
 
 
-def inactive(state, root):
+def inactive(state, root, event="SessionStart"):
     skill = "session-guard-setup" if PROJECT_MODE else "session-guard:setup"
     if state == "setup":
-        ctx, user = SETUP_NEEDED % (skill, command()), "inactive until its one-time setup is done (/%s)." % skill
+        ctx, user = SETUP_NEEDED % (skill, command()), "setup pending: Claude starts it with your next message."
     elif state == "review":
-        ctx, user = REVIEW_NEEDED % (root, skill, command()), "inactive in this project until its rules are reviewed (/%s)." % skill
+        ctx, user = REVIEW_NEEDED % (root, skill, command()), "project review pending: Claude starts it with your next message."
     else:
         ctx, user = DECLINED % (" in this project" if root else "", skill), "off (conflicting rules were kept)."
-    return {"systemMessage": "Session Guard " + user,
-            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}}
+    data = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": ctx}}
+    if event == "SessionStart":
+        data["systemMessage"] = "Session Guard " + user
+    return data
 
 
 def create_project_files(root):
@@ -592,30 +948,24 @@ def ensure_global_block():
 
 
 def clean_states():
-    """Deletes Session Guard's own per-session records (long mode, lock, notices) unused for 30 days, so the
-    reopened-conversation search stays fast. A locked session's record is kept: a reopened old session stays
-    locked. Nothing else is ever deleted here (no project, conversation or setup file)."""
-    for path in glob.glob(os.path.join(STATE_DIR, "*.json")):
+    """Deletes Session Guard's own per-session records (long mode, locks, notices) and start markers unused for
+    30 days, so the reopened-conversation search stays fast. A locked session's record is kept: a reopened old
+    session stays locked. Nothing else is ever deleted here (no project, conversation or setup file)."""
+    for path in glob.glob(os.path.join(STATE_DIR, "*.json")) + glob.glob(os.path.join(STATE_DIR, "started", "*")):
         if time.time() - os.path.getmtime(path) <= STATE_MAX_AGE:
             continue
         try:
             with open(path, encoding="utf-8") as fh:
-                locked = fix_state(json.load(fh)).get("locked")
+                data = json.load(fh)
+            locked = os.path.dirname(path) == STATE_DIR and bool(closed(fix_state(data)))
         except (OSError, ValueError):
             locked = False
         if not locked:
             os.remove(path)
 
 
-def on_session_start(inp):
-    if os.path.isdir(STATE_DIR):
-        clean_states()
-    if inp.get("source") == "resume":
-        return 0
-    root = project_root(inp)
-    state = activation(root)
-    if state != "active":
-        return emit(inactive(state, root))
+def start_context(root):
+    """What a session gets when Session Guard is active: rules, general rules, project files, STATUS.md."""
     parts = [RULES]
     if PROJECT_MODE:
         parts.append(GENERAL_RULES)  # no global CLAUDE.md here (cloud)
@@ -626,6 +976,7 @@ def on_session_start(inp):
         elif block == "broken":
             parts.append("WARNING: the session-guard markers in ~/.claude/CLAUDE.md are damaged, so the general rules "
                          "were not refreshed. Tell the user; the setup (skill session-guard:setup) repairs it.")
+        refresh_statusline()
     # A worktree gets the files from its main checkout through git, never a second, diverging copy.
     made = create_project_files(root) if root and main_checkout(root) == root else []
     if made:
@@ -637,19 +988,75 @@ def on_session_start(inp):
             parts.append("docs/STATUS.md (already loaded, do not read again):\n\n" + fh.read()[:8000])
     elif root is None:
         parts.append("Not in a project folder (home, drive root, ~/.claude or a system folder): no project files.")
-    return emit({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "\n\n".join(parts)}})
+    return "\n\n".join(parts)
+
+
+def quota_start(sid, hit):
+    """A new session while the shared quota reading is past its stop threshold: locked at once, nothing created."""
+    state = load_state(sid, [])
+    quota_lock(state, hit)
+    save_state(sid, state, [])
+    text = quota_text(state["locks"]["quota"])
+    return emit({"systemMessage": text, "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
+                 "[Session Guard] QUOTA LOCK: " + text + " Do no work; the user's prompts are blocked until then."}})
+
+
+def on_session_start(inp):
+    if os.path.isdir(STATE_DIR):
+        clean_states()
+    sid = inp.get("session_id")
+    resume = inp.get("source") == "resume"
+    root = project_root(inp)
+    state = activation(root)
+    if state == "declined":
+        mark_started(sid, False)
+        return 0 if resume else emit(inactive(state, root))
+    hit = quota_hit() if not PROJECT_MODE else None
+    if hit:
+        mark_started(sid, old_rules_flag(sid) if resume else False)
+        return quota_start(sid, hit)
+    if state != "active":
+        mark_started(sid, False)
+        return emit(inactive(state, root))
+    if resume:
+        # The conversation already holds the rules if it got them before; one that started before the install or
+        # while setup was pending gets them with its next prompt.
+        mark_started(sid, old_rules_flag(sid))
+        return 0
+    mark_started(sid, True)
+    return emit({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": start_context(root)}})
 
 
 def on_prompt(inp):
-    if activation(project_root(inp)) != "active":
+    root = project_root(inp)
+    act = activation(root)
+    if act == "declined":
         return 0
     sid = inp.get("session_id")
+    mark = started(sid)
+    if mark is None:
+        return emit({"decision": "block", "reason": RESTART_PROJECT if PROJECT_MODE else RESTART_PLUGIN})
+    os.utime(os.path.join(STATE_DIR, "started", safe_name(sid)))  # in use: kept by the 30-day cleanup
     context, last, ids, pending, stale, _, _ = read_transcript(inp.get("transcript_path"))
     state = load_state(sid, ids)
-    if state.get("locked"):
+    if closed(state):
         save_state(sid, state, ids)
-        return emit({"decision": "block", "reason": "Session Guard: session closed (%s). Open a new session." % state.get("reason", "")})
+        return emit({"decision": "block", "reason": "Session Guard: session closed (%s). Open a new session." % closed(state)})
+    quota = state["locks"].get("quota")
+    if quota and quota_cleared(quota):
+        del state["locks"]["quota"]
+        quota = None
+    if quota:
+        save_state(sid, state, ids)
+        return emit({"decision": "block", "reason": quota_text(quota)})
+    if act != "active":
+        save_state(sid, state, ids)
+        return emit(inactive(act, root, "UserPromptSubmit"))
 
+    head = []
+    if not mark.get("rules"):  # started while setup or review was pending, or before the install
+        head.append(start_context(root))
+        mark_started(sid, True)
     prompt = normalize(inp.get("prompt") or "")
     gap = time.time() - last if last else None
     notes, user = [], []
@@ -665,35 +1072,35 @@ def on_prompt(inp):
 
     limit = LONG_LIMIT if long_mode else NORMAL_LIMIT
     if context is not None and context >= limit and not finish:
-        state.update(locked=True, reason="context %s" % k(context))
+        lock(state, "context", "context %s" % k(context))
         save_state(sid, state, ids)
         return emit({"decision": "block", "reason": "Session Guard: context %s, hard limit. Session closed, open a new session." % k(context)})
 
     if finish:
-        state.update(locked=True, reason="finish session")
+        lock(state, "finish", "finish session")
         notes.append('FINISH SESSION. Do nothing else the message asks. Only follow skill session-guard "Finish session" '
                       '(hand-off + measurement: python "%s" --report). The session is locked after this reply.' % SELF)
         user.append("Finishing session: preparing hand-off. Later messages will not be delivered.")
     elif not long_mode and not pending and gap is not None and gap > BREAK_SECONDS:
         if context is not None and context > BREAK_CONTEXT:
-            state.update(locked=True, reason="break over 1 hour, context %s" % k(context))
-            notes.append("BREAK RULE (gap %d min, context %s > 125k). Do NOT run the user's command and do no reading or "
+            lock(state, "break", "break over 1 hour, context %s" % k(context))
+            notes.append("BREAK RULE (gap %d min, context %s > 100k). Do NOT run the user's command and do no reading or "
                          'research for it. Only follow skill session-guard "Break hand-off"; copy the command into the note '
                          "word for word; tell the user to continue in a new session. The session is locked after this reply."
                          % (gap // 60, k(context)))
             user.append("Break over 1 hour and context %s: command not run, it goes into the hand-off note." % k(context))
         else:
-            notes.append("BREAK REMINDER: gap over 1 hour (%d min), context %s <= 125k. Remind the user in one line, then "
+            notes.append("BREAK REMINDER: gap over 1 hour (%d min), context %s <= 100k. Remind the user in one line, then "
                          "handle the command normally." % (gap // 60, k(context)))
             user.append("Break over 1 hour; context %s, continuing in this session." % k(context))
 
-    if stale and not state.get("locked"):
+    if stale and not closed(state):
         notes.append(STALE_JOBS % stale)
         if "stale24" not in state["notified"]:
             state["notified"].append("stale24")
             user.append(STALE_USER)
 
-    if not state.get("locked"):
+    if not closed(state):
         step = step_for(context, long_mode)
         if step:
             if step[1] not in NOTIFY_ONCE or step[1] not in state["notified"]:
@@ -701,11 +1108,20 @@ def on_prompt(inp):
             if step[1] not in state["notified"]:
                 state["notified"].append(step[1])
                 user.append(step[3])
+        hit = None if PROJECT_MODE else quota_hit()
+        if hit:
+            quota_lock(state, hit)
+            notes.append(QUOTA_STOP % (dict(WINDOWS)[hit[0]], hit[1]["used_percent"], clock(hit[1]["resets_at"])))
+            user.append("quota %d%% (%s): finishing the current step, then locked until %s." % (
+                hit[1]["used_percent"], dict(WINDOWS)[hit[0]], clock(hit[1]["resets_at"])))
+        elif needs_reading(state, False):
+            notes.append(READ_USAGE)
 
     save_state(sid, state, ids)
-    if not notes:
+    if not notes and not head:
         return 0
-    data = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "\n".join([line] + notes)}}
+    data = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                   "additionalContext": "\n\n".join(head + (["\n".join([line] + notes)] if notes else []))}}
     if user:
         data["systemMessage"] = "Session Guard: " + " ".join(user)
     return emit(data)
@@ -718,7 +1134,7 @@ def watch(inp):
     Claude with WATCH_WAKE, so the user is told even when no other hook event happens. A finished turn waiting
     for the user is not a bug: then it exits 0 and costs nothing."""
     sid = inp.get("session_id")
-    token_path = os.path.join(STATE_DIR, "watch", re.sub(r"[^A-Za-z0-9-]", "_", sid or "none"))
+    token_path = os.path.join(STATE_DIR, "watch", safe_name(sid))
     token = "%f %d" % (time.time(), os.getpid())
     os.makedirs(os.path.dirname(token_path), exist_ok=True)
     with open(token_path, "w", encoding="utf-8") as fh:
@@ -732,24 +1148,40 @@ def watch(inp):
                     return 0  # a newer prompt started its own watch
         except OSError:
             return 0
-    if activation(project_root(inp)) != "active":
+    if activation(project_root(inp)) != "active" or started(sid) is None:
         return 0
     _, _, ids, pending, stale, _, turn_open = read_transcript(inp.get("transcript_path"))
-    if load_state(sid, ids).get("locked") or not (pending or stale or turn_open):
+    if load_state(sid, ids)["locks"] or not (pending or stale or turn_open):
         return 0
     sys.stderr.write(WATCH_WAKE)
     return 2
 
 
 def on_tool(inp):
-    """While Claude works: tells once when a new threshold is passed; stops the turn at the hard limit."""
-    if activation(project_root(inp)) != "active":
+    """While Claude works: takes quota readings, tells once when a new threshold is passed, stops the turn at the
+    hard limit and 15 minutes after a quota stop."""
+    act = activation(project_root(inp))
+    if act == "declined":
         return 0
+    if inp.get("tool_name") == USAGE_TOOL and not PROJECT_MODE:
+        take_usage(inp.get("tool_response"))
     sid = inp.get("session_id")
+    if act != "active" or started(sid) is None:
+        return 0
     context, _, ids, _, _, prompt_at, _ = read_transcript(inp.get("transcript_path"))
     state = load_state(sid, ids)
-    if state.get("locked"):
+    if closed(state):
         return 0
+    quota = state["locks"].get("quota")
+    if quota:
+        if quota_cleared(quota):
+            del state["locks"]["quota"]
+            save_state(sid, state, ids)
+        elif time.time() - quota.get("at", 0) > QUOTA_GRACE:
+            text = quota_text(quota).replace("Your message was not sent. ", "Work stopped. ")
+            return emit({"continue": False, "stopReason": text, "systemMessage": text})
+        else:
+            return 0
     turn = "turn24:%s" % prompt_at
     if prompt_at and time.time() - prompt_at > PENDING_MAX and turn not in state["notified"]:
         state["notified"].append(turn)  # once per user message
@@ -757,17 +1189,28 @@ def on_tool(inp):
         return emit({"systemMessage": "Session Guard: " + STALE_USER,
                      "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": LONG_TURN}})
     step = step_for(context, state.get("long"))
-    if not step or step[1] in state["notified"]:
-        return 0
-    state["notified"].append(step[1])
-    data = {"systemMessage": "Session Guard: " + step[3],
-            "hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                   "additionalContext": "[Session Guard] Context: %s (during work). %s" % (k(context), step[2])}}
-    if step[4]:
-        state.update(locked=True, reason="context %s" % k(context))
-        data.update({"continue": False, "stopReason": step[3]})
-    save_state(sid, state, ids)
-    return emit(data)
+    if step and step[1] not in state["notified"]:
+        state["notified"].append(step[1])
+        data = {"systemMessage": "Session Guard: " + step[3],
+                "hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                       "additionalContext": "[Session Guard] Context: %s (during work). %s" % (k(context), step[2])}}
+        if step[4]:
+            lock(state, "context", "context %s" % k(context))
+            data.update({"continue": False, "stopReason": step[3]})
+        save_state(sid, state, ids)
+        return emit(data)
+    hit = None if PROJECT_MODE else quota_hit()
+    if hit:
+        quota_lock(state, hit)
+        save_state(sid, state, ids)
+        return emit({"systemMessage": "Session Guard: quota %d%% (%s): finishing the current step, then locked until %s." % (
+                         hit[1]["used_percent"], dict(WINDOWS)[hit[0]], clock(hit[1]["resets_at"])),
+                     "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "[Session Guard] " +
+                         QUOTA_STOP % (dict(WINDOWS)[hit[0]], hit[1]["used_percent"], clock(hit[1]["resets_at"]))}})
+    if needs_reading(state, True):
+        save_state(sid, state, ids)
+        return emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": READ_USAGE}})
+    return 0
 
 
 def report(project_dir):
@@ -891,9 +1334,13 @@ def scan(target):
         else:
             lines.append("PROJECT %s  [review: %s]" % (root, cfg["projects"].get(key(root), "not done")))
         items = review_items(root, is_global)
+        similar = set() if is_global else {key(p) for p in similar_files(root)}
         if not items:
             lines.append("  nothing to review")
         for item in items:
+            if key(item) in similar:
+                lines.append("  %s%s  [same job as CLAUDE.md / STATUS / ARCHIVE: read in full]" % (item, "/" if os.path.isdir(item) else ""))
+                continue
             lines.append("  " + item + ("/" if os.path.isdir(item) else ""))
             lines += ["      " + h for h in hits(item)]
     out("\n".join(lines))
@@ -939,6 +1386,17 @@ def cli(args):
     if args[0] == "--print-rules":
         out(RULES + "\n\n" + BLOCK_BEGIN + "\n" + GENERAL_RULES + "\n" + BLOCK_END)
         return 0
+    if args[0] == "--create-files":
+        root = main_checkout(os.path.abspath(args[1] if len(args) > 1 else os.getcwd()))
+        made = create_project_files(root)
+        out("project files created in %s: %s" % (root, ", ".join(made) if made else "none (all present)"))
+        return 0
+    if args[0] == "--install-statusline":
+        out("status line (%s): %s" % (SETTINGS, install_statusline()))
+        return 0
+    if args[0] == "--uninstall-statusline":
+        out("status line (%s): %s" % (SETTINGS, uninstall_statusline()))
+        return 0
     return 2
 
 
@@ -955,7 +1413,13 @@ def main():
     args = [a for a in args if a != "--project"]
     if args[:1] == ["--report"]:
         return report(args[1] if len(args) > 1 else None)
-    if args[:1] and args[0] in ("--scan", "--install-global", "--setup", "--print-rules"):
+    if args[:1] == ["--statusline"]:
+        try:
+            return statusline()
+        except Exception:  # a status line must never show an error
+            return 0
+    if args[:1] and args[0] in ("--scan", "--install-global", "--setup", "--print-rules", "--create-files",
+                                "--install-statusline", "--uninstall-statusline"):
         return cli(args)
     try:
         if PROJECT_MODE and plugin_installed():

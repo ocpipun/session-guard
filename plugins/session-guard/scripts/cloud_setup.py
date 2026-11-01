@@ -3,20 +3,17 @@
 Cloud sessions do not install plugins, but they do run the repository's own
 .claude/settings.json hooks and .claude/skills. This script adds:
     <repo>/.claude/session-guard/session_guard.py
-    <repo>/.claude/session-guard/setup.json          (review approved, rules version)
     <repo>/.claude/skills/session-guard/SKILL.md
     <repo>/.claude/skills/session-guard-setup/SKILL.md
     hooks in <repo>/.claude/settings.json (merged, existing settings kept)
-    the missing CLAUDE.md, docs/STATUS.md, docs/STATUS_ARCHIVE.md (existing files untouched)
-It refuses to run until the repository passed the Session Guard project review
-(skill setup), because the cloud copy is only allowed where no conflicting rule
-is left. The project copy runs with --project: on a machine where the plugin is
+The project review (conflicting rules, similar files) and the missing CLAUDE.md,
+docs/STATUS.md, docs/STATUS_ARCHIVE.md come in the next cloud session: the copy
+starts the review by itself, and stays inactive until the user approves it.
+The project copy runs with --project: on a machine where the plugin is
 installed it stays quiet, so the guard never runs twice. Safe to run again
 (updates files, adds no duplicate hooks).
 
-Usage: python cloud_setup.py [--reviewed] [repo_dir]      (default: current directory)
-    --reviewed   the user approved the project review in this session (CLOUD.md: install from a cloud
-                 session, where the plugin and its setup record do not exist)
+Usage: python cloud_setup.py [repo_dir]      (default: current directory; v1.1's --reviewed is ignored)
 """
 import json
 import os
@@ -55,22 +52,11 @@ def main():
     global REPO
     args = [a for a in sys.argv[1:] if a != "--reviewed"]
     REPO = os.path.abspath(args[0] if args else os.getcwd())
-    cfg = sg.load_config()
-    status = cfg["projects"].get(sg.key(REPO))
-    if status != "approved" and "--reviewed" not in sys.argv:
-        if sg.review_items(REPO):
-            print("Not copied: %s has not passed the Session Guard project review (status: %s)." % (REPO, status or "not done"))
-            print("Run the project review first (skill session-guard:setup, \"Project review\").")
-            return 1
-        cfg["projects"][sg.key(REPO)] = "approved"  # nothing to review; the CLAUDE.md made below is Session Guard's
-        sg.save_config(cfg)
     claude = os.path.join(REPO, ".claude")
     os.makedirs(os.path.join(claude, "session-guard"), exist_ok=True)
     shutil.copyfile(os.path.join(HERE, "session_guard.py"), os.path.join(claude, "session-guard", "session_guard.py"))
     copy_skill("session-guard", "session-guard")
     copy_skill("setup", "session-guard-setup")
-    sg.write_marker(REPO, "approved")
-    made = sg.create_project_files(REPO)
 
     path = os.path.join(claude, "settings.json")
     settings = {}
@@ -96,8 +82,7 @@ def main():
     print("Session Guard copied into %s" % REPO)
     print("  .claude/session-guard/ (script, setup.json), .claude/skills/session-guard/, .claude/skills/session-guard-setup/")
     print("  hooks added: %s" % (", ".join(added) if added else "none (already present)"))
-    print("  project files created: %s" % (", ".join(made) if made else "none (all present)"))
-    print("Commit these files; cloud sessions of this repository will then run Session Guard.")
+    print("Commit these files. In a new cloud session of this repository Session Guard starts with its project review.")
     return 0
 
 
