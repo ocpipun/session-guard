@@ -94,6 +94,8 @@ class Guard(unittest.TestCase):
         first = self.run_hook("UserPromptSubmit", "s1", t, "go")
         second = self.run_hook("UserPromptSubmit", "s1", t, "go")
         self.assertIn("250k", first["systemMessage"])
+        self.assertIn("250k threshold passed", self.context(first))
+        self.assertIn("This is a Session Guard notice", self.context(first))
         self.assertNotIn("NOTICE", self.context(second))
 
     def test_300k_hand_off_repeats(self):
@@ -111,7 +113,9 @@ class Guard(unittest.TestCase):
 
     def test_threshold_during_work_told_once(self):
         t = self.transcript("t", 305_000)
-        self.assertIn("HAND-OFF", self.context(self.run_hook("PostToolUse", "s1", t)))
+        during = self.context(self.run_hook("PostToolUse", "s1", t))
+        self.assertIn("HAND-OFF", during)
+        self.assertIn("300k threshold passed", during)
         self.assertEqual(self.run_hook("PostToolUse", "s1", t), {})
 
     # --- long mode --------------------------------------------------------

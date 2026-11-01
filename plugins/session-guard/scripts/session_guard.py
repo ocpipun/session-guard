@@ -97,6 +97,10 @@ LONG_STEPS = [
      "Context passed 250k (long mode).", False),
 ]
 # Pure notices are given once; the restrictions from 300k on repeat on every prompt.
+# Every threshold reaches the user in one fixed form, so it is clearly Session Guard's and not Claude's own idea.
+NOTICE_FORM = (' Tell the user in one line, in their language, in this form: "%dk threshold passed: <what this means '
+               'now, in a few words>. *This is a Session Guard notice." Then keep to the instruction; in the middle of '
+               'work, give the line and go on working.')
 NOTIFY_ONCE = {"n250", "l250", "l300", "l700"}
 
 # Something active for over 24 hours (PENDING_MAX) is probably a bug: the user is told, not left waiting.
@@ -120,6 +124,8 @@ RULES = """[Session Guard] Rules for this session (plugin session-guard).
 - You cannot measure context size or time between messages. Session Guard measures them itself and writes to
   you ("[Session Guard] Context: ...") only when it has an instruction. Follow it. Quote its numbers; never
   invent one. Never add context size or mode to your replies on your own.
+- Each threshold instruction gives the user one line: "<N>k threshold passed: <what now>. *This is a Session
+  Guard notice." (in the user's language); during work give it and keep working.
 - Act on a threshold only when Session Guard's instruction for it arrives, never earlier on your own: no early
   notice, no hand-off note, no "open a new session" for size or cost, even when you expect the next task to cross
   250k/300k at once. Session Guard checks after every tool call while you work and stops at 400k (900k long
@@ -1090,7 +1096,7 @@ def on_prompt(inp):
         step = step_for(context, long_mode)
         if step:
             if step[1] not in NOTIFY_ONCE or step[1] not in state["notified"]:
-                notes.append(step[2])
+                notes.append(step[2] + (NOTICE_FORM % (step[0] // K) if step[1] not in state["notified"] else ""))
             if step[1] not in state["notified"]:
                 state["notified"].append(step[1])
                 user.append(step[3])
@@ -1179,7 +1185,8 @@ def on_tool(inp):
         state["notified"].append(step[1])
         data = {"systemMessage": "Session Guard: " + step[3],
                 "hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                       "additionalContext": "[Session Guard] Context: %s (during work). %s" % (k(context), step[2])}}
+                                       "additionalContext": "[Session Guard] Context: %s (during work). %s%s" % (
+                                           k(context), step[2], NOTICE_FORM % (step[0] // K))}}
         if step[4]:
             lock(state, "context", "context %s" % k(context))
             data.update({"continue": False, "stopReason": step[3]})
