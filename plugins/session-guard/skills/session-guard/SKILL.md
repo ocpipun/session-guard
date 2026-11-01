@@ -9,6 +9,7 @@ Numbers come from the "[Session Guard]" line on each prompt; never estimate them
 The rules themselves are given at session start by the plugin.
 
 ## Hand-off (300k, 700k, 800k, or on request)
+Only when a Session Guard instruction or the user asks for it, never earlier on your own (250k is a notice only).
 1. Read `docs/STATUS.md` (create `docs/` and the file if missing). If the project's CLAUDE.md sets its own rules
    for STATUS, follow them.
 2. Remove finished items and needless detail. If a line will matter later (decision, measurement, proven cause,

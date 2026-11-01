@@ -120,6 +120,12 @@ RULES = """[Session Guard] Rules for this session (plugin session-guard).
 - You cannot measure context size or time between messages. Session Guard measures them itself and writes to
   you ("[Session Guard] Context: ...") only when it has an instruction. Follow it. Quote its numbers; never
   invent one. Never add context size or mode to your replies on your own.
+- Act on a threshold only when Session Guard's instruction for it arrives, never earlier on your own: no early
+  notice, no hand-off note, no "open a new session" for size or cost, even when you expect the next task to cross
+  250k/300k at once. Session Guard checks after every tool call while you work and stops at 400k (900k long
+  mode), so work on and follow its instruction when it comes. 250k (and 300k in long mode) is a notice only.
+- The "Hand-off note" section of STATUS.md is written only on a Session Guard instruction (hand-off, break,
+  finish session) or when the user asks. Updating the rest of STATUS when a step ends is right.
 - Session start: docs/STATUS.md (if any) is given below; do not read it again. Read docs/STATUS_ARCHIVE.md only
   when needed, and then only the matching part via search.
 - Normal mode: 250k notice; 300k hand-off, then no new tasks (only information questions and hand-off note
