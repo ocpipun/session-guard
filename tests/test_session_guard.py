@@ -689,7 +689,7 @@ class Guard(unittest.TestCase):
         self.app_language("en-US")
         self.assertIn("English", self.cli("--set-language"))
         self.env.pop("LOCALAPPDATA")  # app settings not found: Claude asks the user
-        self.assertIn("ask the user in English", self.cli("--set-language"))
+        self.assertIn("Which language would you like session-guard notices in?", self.cli("--set-language"))
         path = os.path.join(self.home, "x.json")
         with open(path, "w") as fh:
             json.dump({"declined": "x"}, fh)
@@ -702,7 +702,7 @@ class Guard(unittest.TestCase):
         cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
         copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
         run = lambda *a: subprocess.run([sys.executable, "-I", copy, "--project", *a], capture_output=True, env=cloud).stdout.decode()
-        self.assertIn("ask the user in English", run("--set-language"))
+        self.assertIn("Which language would you like session-guard notices in?", run("--set-language"))
         self.assertIn("translation complete", run("--set-language", "tr"))  # the plugin's Turkish was copied along
         self.assertTrue(os.path.exists(os.path.join(repo, ".claude", "session-guard", "language.json")))
         start = json.dumps({"hook_event_name": "SessionStart", "session_id": "n", "source": "startup"}).encode()

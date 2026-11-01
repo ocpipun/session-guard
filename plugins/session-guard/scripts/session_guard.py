@@ -280,6 +280,7 @@ MESSAGES = {
     "review_pending": "Project review pending: Claude starts it with your next message.",
     "declined": "Off (conflicting rules were kept).",
 }
+LANGUAGE_QUESTION = "Which language would you like session-guard notices in?"  # asked where the app language cannot be read (cloud, or its file moved)
 PLACEHOLDER = re.compile(r"%\((\w+)\)[sd]")
 
 

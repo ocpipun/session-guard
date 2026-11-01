@@ -38,8 +38,9 @@ unless the user wants it gone.
 ## Notices (part of every approved full setup, and of the project review in a repository copy)
 The app shows some Session Guard notices itself (blocked prompts, locks, thresholds); Claude never sees them. Their
 language is chosen once, here, and never checked again: `SG --set-language` reads the Claude desktop app's language
-setting one time. Terminal: English. Where the app language cannot be read (always with `--project`, the cloud),
-add this question in English to the approval question: "Which language would you like Session Guard notices in?"
+setting one time. Terminal: English. Where the app language cannot be read (always with `--project`, the cloud;
+or the app's settings file is missing or was moved by an app update), add this question, in English and word for
+word, to the approval question: "Which language would you like session-guard notices in?"
 and run `SG --set-language <code>` with the answer (ISO code, e.g. `fr`; `english` for none). If it reports notices without a translation, translate them into that
 language, keep every `%(name)s` / `%(name)d` placeholder (`%%` is a literal percent sign) and leave "Session Guard",
 "finish session" and "start long mode" untranslated; write a JSON object {name: text} to a temporary file,
