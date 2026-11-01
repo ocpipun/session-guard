@@ -55,6 +55,10 @@ def main():
     claude = os.path.join(REPO, ".claude")
     os.makedirs(os.path.join(claude, "session-guard"), exist_ok=True)
     shutil.copyfile(os.path.join(HERE, "session_guard.py"), os.path.join(claude, "session-guard", "session_guard.py"))
+    folder = os.path.join(claude, "session-guard", "messages")  # the plugin's translations; the user's go here too
+    os.makedirs(folder, exist_ok=True)
+    for name in os.listdir(os.path.join(PLUGIN, "messages")):
+        shutil.copyfile(os.path.join(PLUGIN, "messages", name), os.path.join(folder, name))
     copy_skill("session-guard", "session-guard")
     copy_skill("setup", "session-guard-setup")
 

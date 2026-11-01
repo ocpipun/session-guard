@@ -245,10 +245,11 @@ DECLINED = ("[Session Guard] OFF%s: the user kept rules that conflict with it. D
 
 
 # --- notices the user sees directly (shown by the app; Claude never sees them, so it cannot translate them) ---
-# Language: chosen once, at setup (--set-language reads the Claude desktop app's language setting one time) or
-# when the user asks for another one; it is never checked again. Terminal and cloud: English. Translations: the
-# user's own (~/.claude/session_guard/config/messages/<locale>.json, written by --set-messages) or the plugin's
-# (messages/<locale>.json). A language with no translation: English. Translating is the user's business (MIT).
+# Language: chosen once, at setup (--set-language reads the Claude desktop app's language setting one time; where
+# it cannot be read, as in the cloud, Claude asks the user in English) or when the user asks for another one; it is
+# never checked again. Terminal: English. Translations: the user's own (written by --set-messages) over the
+# plugin's (messages/<locale>.json); a repository copy keeps both in .claude/session-guard/messages/ and the choice
+# in .claude/session-guard/language.json. No translation: English. Translating is the user's business (MIT).
 # Placeholders: %(name)s / %(name)d.
 MESSAGES = {
     "n400": "Context 400k: hard limit. Session closed, open a new session.",
@@ -280,14 +281,53 @@ MESSAGES = {
     "declined": "Off (conflicting rules were kept).",
 }
 PLACEHOLDER = re.compile(r"%\((\w+)\)[sd]")
-OWN_MESSAGES = os.path.join(STATE_DIR, "config", "messages")
-PLUGIN_MESSAGES = os.path.join(os.path.dirname(os.path.dirname(SELF)), "messages")
+
+
+def repo_guard_dir():
+    return os.path.join(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(), ".claude", "session-guard")
+
+
+def own_messages():
+    return os.path.join(repo_guard_dir(), "messages") if PROJECT_MODE else os.path.join(STATE_DIR, "config", "messages")
+
+
+def plugin_messages():
+    return own_messages() if PROJECT_MODE else os.path.join(os.path.dirname(os.path.dirname(SELF)), "messages")
+
+
+def stored_locale():
+    if PROJECT_MODE:
+        try:
+            with open(os.path.join(repo_guard_dir(), "language.json"), encoding="utf-8") as fh:
+                return json.load(fh).get("locale") or None
+        except (OSError, ValueError, AttributeError):
+            return None
+    return load_config().get("locale") or None
+
+
+def store_locale(locale):
+    if PROJECT_MODE:
+        path = os.path.join(repo_guard_dir(), "language.json")
+        if locale:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"locale": locale}, fh)
+                fh.write("\n")
+        elif os.path.exists(path):
+            os.remove(path)
+        return
+    cfg = load_config()
+    if locale:
+        cfg["locale"] = locale
+    else:
+        cfg.pop("locale", None)
+    save_config(cfg)
 _translated = None
 
 
 def app_locale():
-    """The language selected in the Claude desktop app ("tr", "pt-br"), read once by --set-language at setup;
-    None (English) when it is English or the app's settings file is not found."""
+    """The language selected in the Claude desktop app ("tr", "pt-br", "en"), read once by --set-language at
+    setup; None when the app's settings file is not found (then Claude asks the user)."""
     places = []
     for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA"),
                  os.path.join(HOME, "Library", "Application Support")):
@@ -301,41 +341,37 @@ def app_locale():
         except (OSError, ValueError, AttributeError):
             continue
         if isinstance(found, str) and re.match(r"^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$", found):
-            found = found.lower().replace("_", "-")
-            return None if found == "en" or found.startswith("en-") else found
+            return found.lower().replace("_", "-")
     return None
 
 
 def notice_locale():
-    """The language chosen at setup, for the desktop app only; None (English) in the terminal and the cloud."""
-    if PROJECT_MODE or os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop":
+    """The language chosen at setup; None (English) in the terminal (a plugin outside the desktop app)."""
+    if not PROJECT_MODE and os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop":
         return None
-    return load_config().get("locale") or None
+    return stored_locale()
 
 
 def set_language(args):
     """--set-language [code|english]: no code = the desktop app's current setting, read this one time."""
-    locale = (args[0].lower().replace("_", "-") if args else app_locale()) or "english"
-    cfg = load_config()
+    locale = args[0].lower().replace("_", "-") if args else (None if PROJECT_MODE else app_locale())
+    if not locale:
+        out("app language not found: ask the user in English which language they want Session Guard notices in, "
+            "then run --set-language <code>")
+        return 1
     if locale in ("en", "english") or locale.startswith("en-"):
-        cfg.pop("locale", None)
-        save_config(cfg)
+        store_locale(None)
         out("notice language: English")
         return 0
-    cfg["locale"] = locale
-    save_config(cfg)
+    store_locale(locale)
     global _translated
     _translated = None
-    full = {n: t for n, t in load_translation(translation_file(locale, own=False)).items() if valid_translation(n, t)}
-    full.update({n: t for n, t in load_translation(translation_file(locale)).items() if valid_translation(n, t)})
+    full = {n: t for n, t in load_translation(os.path.join(plugin_messages(), locale + '.json')).items() if valid_translation(n, t)}
+    full.update({n: t for n, t in load_translation(os.path.join(own_messages(), locale + '.json')).items() if valid_translation(n, t)})
     left = [n for n in MESSAGES if n not in full]
     out("notice language: %s; %s" % (locale, "translation complete" if not left else
         "notices without a translation (English until translated): " + ", ".join(left)))
     return 0
-
-
-def translation_file(locale, own=True):
-    return os.path.join(OWN_MESSAGES if own else PLUGIN_MESSAGES, locale + ".json")
 
 
 def load_translation(path):
@@ -351,11 +387,11 @@ def translations():
     """The notices for the app's language: the user's own translation over the plugin's; {} for English."""
     global _translated
     if _translated is None:
-        locale = load_config().get("locale")
+        locale = stored_locale()
         _translated = {}
         if locale:
-            _translated.update(load_translation(translation_file(locale, own=False)))
-            _translated.update({n: t for n, t in load_translation(translation_file(locale)).items() if valid_translation(n, t)})
+            _translated.update(load_translation(os.path.join(plugin_messages(), locale + '.json')))
+            _translated.update({n: t for n, t in load_translation(os.path.join(own_messages(), locale + '.json')).items() if valid_translation(n, t)})
     return _translated
 
 
@@ -377,7 +413,7 @@ def msg(name, **values):
 
 def missing_translations():
     """(locale, notices without a translation) for the language chosen at setup; (None, []) for English."""
-    locale = load_config().get("locale")
+    locale = stored_locale()
     if not locale:
         return None, []
     found = translations()
@@ -386,12 +422,12 @@ def missing_translations():
 
 def set_messages(path):
     """Stores a translation for the chosen language in the user's own file (kept over plugin updates)."""
-    locale = load_config().get("locale")
+    locale = stored_locale()
     if not locale:
         out("not stored: the notice language is English (choose one first with --set-language)")
         return 1
     data = load_translation(path)
-    stored = {n: t for n, t in load_translation(translation_file(locale)).items() if valid_translation(n, t)}
+    stored = {n: t for n, t in load_translation(os.path.join(own_messages(), locale + '.json')).items() if valid_translation(n, t)}
     bad = []
     for name in MESSAGES:
         if name in data:
@@ -399,14 +435,14 @@ def set_messages(path):
                 stored[name] = data[name]
             else:
                 bad.append(name)
-    os.makedirs(OWN_MESSAGES, exist_ok=True)
-    with open(translation_file(locale), "w", encoding="utf-8") as fh:
+    os.makedirs(own_messages(), exist_ok=True)
+    with open(os.path.join(own_messages(), locale + '.json'), "w", encoding="utf-8") as fh:
         json.dump(stored, fh, ensure_ascii=False, indent=1)
         fh.write("\n")
     global _translated
     _translated = None
     _, left = missing_translations()
-    out("stored %d notices for locale %s (%s)%s%s" % (len(stored), locale, translation_file(locale),
+    out("stored %d notices for locale %s (%s)%s%s" % (len(stored), locale, os.path.join(own_messages(), locale + '.json'),
         "; rejected (placeholders changed): " + ", ".join(bad) if bad else "",
         "; still English: " + ", ".join(left) if left else ""))
     return 0

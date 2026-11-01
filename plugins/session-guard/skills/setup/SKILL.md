@@ -35,10 +35,12 @@ decisions, measurements, history go to docs/STATUS_ARCHIVE.md; permanent project
 A file emptied by moves is deleted. Another tool's own rule file (AGENTS.md and the like) is kept and only edited,
 unless the user wants it gone.
 
-## Notices (part of every approved full setup)
+## Notices (part of every approved full setup, and of the project review in a repository copy)
 The app shows some Session Guard notices itself (blocked prompts, locks, thresholds); Claude never sees them. Their
 language is chosen once, here, and never checked again: `SG --set-language` reads the Claude desktop app's language
-setting one time. Terminal and cloud: English. If it reports notices without a translation, translate them into that
+setting one time. Terminal: English. Where the app language cannot be read (always with `--project`, the cloud),
+add this question in English to the approval question: "Which language would you like Session Guard notices in?"
+and run `SG --set-language <code>` with the answer (ISO code, e.g. `fr`; `english` for none). If it reports notices without a translation, translate them into that
 language, keep every `%(name)s` / `%(name)d` placeholder (`%%` is a literal percent sign) and leave "Session Guard",
 "finish session" and "start long mode" untranslated; write a JSON object {name: text} to a temporary file,
 `SG --set-messages <file>`, delete the file. Do not show the translations to the user.
@@ -76,9 +78,10 @@ session-start message "notices without a translation" (after an update) means: t
 
 ## Project review (one project; message says PROJECT REVIEW PENDING)
 Same steps for that folder only: `SG --scan "<folder>"`, read, list (the status line and global block are not part
-of it), ask. Yes: `SG --create-files "<folder>"`, the changes, `SG --setup approved "<folder>"`. No:
+of it), ask. Yes: `SG --create-files "<folder>"`, the changes, with `--project` also "Notices",
+`SG --setup approved "<folder>"`. No:
 `SG --setup declined "<folder>"` (Session Guard stays off in that project only).
-In a repository copy (`--project`, cloud): commit the changes, the project files, and `.claude/session-guard/setup.json`
+In a repository copy (`--project`, cloud): commit the changes, the project files, and `.claude/session-guard/` (setup.json, language.json, messages/)
 with the session's work, or the next cloud session asks again.
 
 ## Uninstall (on request)

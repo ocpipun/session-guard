@@ -680,10 +680,30 @@ class Guard(unittest.TestCase):
     def test_english_stores_nothing(self):
         self.app_language("en-US")
         self.assertIn("English", self.cli("--set-language"))
+        self.env.pop("LOCALAPPDATA")  # app settings not found: Claude asks the user
+        self.assertIn("ask the user in English", self.cli("--set-language"))
         path = os.path.join(self.home, "x.json")
         with open(path, "w") as fh:
             json.dump({"declined": "x"}, fh)
         self.assertIn("not stored", self.cli("--set-messages", path))
+
+    def test_cloud_asks_and_keeps_language_in_repo(self):
+        repo = self.project("repo")
+        subprocess.run([sys.executable, "-I", SETUP, repo], capture_output=True, env=self.env, check=True)
+        shutil.rmtree(os.path.join(self.home, ".claude"))
+        cloud = dict(self.env, CLAUDE_PROJECT_DIR=repo)
+        copy = os.path.join(repo, ".claude", "session-guard", "session_guard.py")
+        run = lambda *a: subprocess.run([sys.executable, "-I", copy, "--project", *a], capture_output=True, env=cloud).stdout.decode()
+        self.assertIn("ask the user in English", run("--set-language"))
+        self.assertIn("translation complete", run("--set-language", "tr"))  # the plugin's Turkish was copied along
+        self.assertTrue(os.path.exists(os.path.join(repo, ".claude", "session-guard", "language.json")))
+        start = json.dumps({"hook_event_name": "SessionStart", "session_id": "n", "source": "startup"}).encode()
+        subprocess.run([sys.executable, "-I", copy, "--project"], input=start, capture_output=True, env=cloud)
+        for prompt in ("finish session", "hi"):
+            data = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "n", "prompt": prompt}).encode()
+            r = subprocess.run([sys.executable, "-I", copy, "--project"], input=data, capture_output=True, env=cloud)
+        self.assertIn("Oturum kapandı", json.loads(r.stdout)["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
