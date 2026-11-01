@@ -27,8 +27,9 @@ PLUGIN = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import session_guard as sg  # noqa: E402  (same folder; -I leaves it off sys.path)
 
-COMMAND = ('if [ "$OS" = "Windows_NT" ]; then python -I "$CLAUDE_PROJECT_DIR/.claude/session-guard/session_guard.py" --project; '
-           'else python3 -I "$CLAUDE_PROJECT_DIR/.claude/session-guard/session_guard.py" --project; fi')
+# A missing script (the copy removed) must never block a prompt: exit 0 then.
+COMMAND = ('S="$CLAUDE_PROJECT_DIR/.claude/session-guard/session_guard.py"; [ -f "$S" ] || exit 0; '
+           'if [ "$OS" = "Windows_NT" ]; then python -I "$S" --project; else python3 -I "$S" --project; fi')
 WATCH = COMMAND.replace(" --project;", " --project --watch;")
 # (event, matcher, hook): the 24-hour watch runs in the background and may wake Claude (asyncRewake, exit code 2).
 HOOKS = [("SessionStart", None, {"type": "command", "command": COMMAND, "timeout": 10}),

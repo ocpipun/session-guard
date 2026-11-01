@@ -92,11 +92,11 @@ Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard"
 
 What happens, all in that one session:
 
-1. Claude installs the plugin.
+1. Claude downloads Session Guard. An older version needs no removal: it is updated at the end.
 2. It scans your global `~/.claude` (CLAUDE.md, memory files, skills, commands, agents, scripts, output styles, rules, hooks) and every project Claude Code has sessions for, and shows **one list**: rules that conflict with Session Guard or repeat it, skills, scripts or hooks that do the same job, and files that do the project files' job under another name. Project facts and a project's own STATUS layout are not conflicts.
 3. The same message says what else setup does: the general rules block in `~/.claude/CLAUDE.md` (your other rules stay), the missing project files, and the status line in `~/.claude/settings.json` (terminal quota readings; another status line you already have is left alone; the code is public here, MIT). If the app language cannot be read, the language question is in it too.
 4. You answer **once**. The approved items are deleted for good (no backup copies, so nothing half-moved is left behind). **If you do not approve, Session Guard stays off;** `/session-guard:setup` runs it again any time.
-5. Last step: **fully quit Claude** (in the desktop app also from the system tray) **and reopen it.** Until then, sessions that were open during the install are unprotected, or locked where Session Guard already runs in them. After reopening you type nothing and are asked nothing.
+5. Claude installs (or updates) the plugin. Last step: **fully quit Claude** (in the desktop app also from the system tray) **and reopen it.** Until then, open sessions run as before. After reopening you type nothing and are asked nothing.
 
 Installed at user scope, it works in every project on that machine. A project opened later that has its own CLAUDE.md, similar files, skills or hooks gets the same review once, for that project only (it starts by itself); declining turns Session Guard off in that project only. When an update changes the rules, the setup runs again.
 

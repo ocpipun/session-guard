@@ -92,11 +92,11 @@ Install Session Guard: run "claude plugin marketplace add ocpipun/session-guard"
 
 Hepsi o tek oturumda olur:
 
-1. Claude eklentiyi kurar.
+1. Claude Session Guard'ı indirir. Eski bir sürüm kaldırılmaz: sonda güncellenir.
 2. Genel `~/.claude` klasörünüzü (CLAUDE.md, hafıza dosyaları, skill'ler, komutlar, ajanlar, betikler, çıktı stilleri, kurallar, hook'lar) ve Claude Code'un oturumu olan her projeyi tarar, **tek liste** gösterir: Session Guard'la çakışan ya da onu tekrarlayan kurallar, aynı işi yapan skill, betik ya da hook'lar ve proje dosyalarının işini başka adla yapan dosyalar. Proje bilgileri ve projenin kendi STATUS düzeni çakışma sayılmaz.
 3. Aynı mesaj kurulumun başka ne yaptığını da söyler: `~/.claude/CLAUDE.md`'deki genel kurallar bloğu (diğer kurallarınız kalır), eksik proje dosyaları ve `~/.claude/settings.json`'daki durum çubuğu (terminalde kota okuması; zaten başka bir durum çubuğunuz varsa ona dokunulmaz; kod burada herkese açık, MIT). Uygulama dili okunamazsa dil sorusu da bu mesajdadır.
 4. **Bir kez** cevap verirsiniz. Onaylanan maddeler kalıcı olarak silinir (yedek kopya yok, yarım taşınmış bir şey kalmasın diye). **Onaylamazsanız Session Guard kapalı kalır;** `/session-guard:setup` ile istediğiniz zaman yeniden çalıştırın.
-5. Son adım: **Claude'u tamamen kapatın** (masaüstü uygulamasında sistem tepsisinden de) **ve yeniden açın.** O zamana kadar kurulum sırasında açık olan oturumlar korumasızdır, ya da Session Guard'ın zaten çalıştığı oturumlarda kilitlidir. Yeniden açtıktan sonra hiçbir şey yazmazsınız, size hiçbir şey sorulmaz.
+5. Claude eklentiyi kurar (ya da günceller). Son adım: **Claude'u tamamen kapatın** (masaüstü uygulamasında sistem tepsisinden de) **ve yeniden açın.** O zamana kadar açık oturumlar eskisi gibi çalışır. Yeniden açtıktan sonra hiçbir şey yazmazsınız, size hiçbir şey sorulmaz.
 
 Kullanıcı kapsamında kurulduğu için o bilgisayardaki her projede çalışır. Sonradan açılan ve kendi CLAUDE.md'si, benzer dosyaları, skill'leri ya da hook'ları olan bir proje, yalnız o proje için bir kez aynı incelemeden geçer (kendiliğinden başlar); reddetmek Session Guard'ı yalnız o projede kapatır. Bir güncelleme kuralları değiştirirse kurulum yeniden çalışır.
 
