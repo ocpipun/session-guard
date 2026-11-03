@@ -301,20 +301,24 @@ class Guard(Base):
         out = self.hook("UserPromptSubmit", "h", self.transcript("h", 710000), cwd=root, prompt="go")
         self.assertIn("NOTICE (700k", self.ctx(out))
         self.assertNotIn("Hand off", self.ctx(out))
+        self.assertNotIn("SESSION MEASUREMENT", self.ctx(out))
         out = self.hook("PostToolUse", "h", self.transcript("h", 810000), cwd=root, tool_name="Bash")
         self.assertIn("Hand off every task you own now", self.ctx(out))
+        self.assertIn("SESSION MEASUREMENT", self.ctx(out))
 
     def test_long_mode_refused_after_300k_handoff(self):
         root = self.project()
         self.start("r", root)
         out = self.hook("PostToolUse", "r", self.transcript("r", 310000), cwd=root, tool_name="Bash")
         self.assertIn("HAND-OFF (300k)", self.ctx(out))
+        self.assertIn('report "%s"' % root, self.ctx(out))
         out = self.hook("UserPromptSubmit", "r", self.transcript("r", 312000), cwd=root, prompt="start long mode")
         self.assertEqual(out.get("decision"), "block")
         self.assertIn("Long mode cannot be switched on", out.get("reason"))
         out = self.hook("UserPromptSubmit", "r", self.transcript("r", 312000), cwd=root, prompt="what is X?")
         self.assertNotIn("decision", out)
         self.assertIn("Mode: normal", self.ctx(out))
+        self.assertNotIn("SESSION MEASUREMENT", self.ctx(out))
 
     def test_finish_refused_after_handoff(self):
         root = self.project()
@@ -331,6 +335,7 @@ class Guard(Base):
         self.hook("UserPromptSubmit", "g", self.transcript("g", 1000), cwd=root, prompt="start long mode")
         out = self.hook("UserPromptSubmit", "g", self.transcript("g", 710000), cwd=root, prompt="finish session")
         self.assertIn("FINISH SESSION", self.ctx(out))
+        self.assertIn('report "%s"' % root, self.ctx(out))
         self.start("k", root)
         self.hook("UserPromptSubmit", "k", self.transcript("k", 1000), cwd=root, prompt="start long mode")
         self.hook("UserPromptSubmit", "k", self.transcript("k", 810000), cwd=root, prompt="go")

@@ -42,6 +42,8 @@ HANDOFF_STEPS = {"n300", "n350", "l800"}
 # Once this step was given, the hand-off is prepared: long mode can no longer be switched on and "finish session"
 # is refused, so no second, stale hand-off of the same session is written.
 HANDED_AT = {False: ("n300", "300k"), True: ("l800", "800k")}
+# The session measurement of "finish session" is asked for with these hand-offs too.
+MEASURE_STEPS = {key for key, _ in HANDED_AT.values()}
 NOTICE_FORM = (' Tell the user in one line, in their language, in this form: "%dk threshold passed: <what this means '
                'now, in a few words>. *This is a Session Guard notice." Then keep to the instruction; in the middle of '
                'work, give the line and go on working.')

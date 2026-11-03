@@ -57,6 +57,13 @@ def sg_cmd():
     return '%s "%s"%s' % ("python" if os.name == "nt" else "python3", ENTRY, " --project" if PROJECT_MODE else "")
 
 
+def measure_todo(root):
+    """Session measurement (v1.4 "finish session"): also after the 300k / 800k hand-off, where finish is refused."""
+    return (' SESSION MEASUREMENT: run %s report "%s", read the weekly and 5-hour quota with the usage tool if there '
+            'is one, and add one row to "Session measurements" in docs/STATUS_ARCHIVE.md ("n/a" for a value you '
+            'cannot read; never invent one).' % (sg_cmd(), root or os.getcwd()))
+
+
 def setup_marker(root):
     return os.path.join(core.project_dir(root), "setup.json")
 
@@ -336,9 +343,8 @@ def on_prompt(inp):
     sid = rec["sg_id"]
     if finish:
         sessions.lock(rec, "finish", "finish session")
-        notes.append('FINISH SESSION. Do nothing else the message asks. Only skill session-guard "Finish session": %s'
-                     ' (measurement: %s --report). The session is locked after this reply.' % (
-                         handoff_todo(data, sid), sg_cmd()))
+        notes.append('FINISH SESSION. Do nothing else the message asks. Only skill session-guard "Finish session": %s.'
+                     '%s The session is locked after this reply.' % (handoff_todo(data, sid), measure_todo(root)))
         user.append(msg("finishing"))
     else:
         br = measure.break_decision(reading, long_mode, finish)
@@ -369,7 +375,9 @@ def on_prompt(inp):
             if step[1] not in measure.NOTIFY_ONCE or step[1] not in rec["notified"]:
                 notes.append(step[2] + (measure.NOTICE_FORM % (step[0] // core.K) if step[1] not in rec["notified"]
                                         else "") + (" " + handoff_todo(data, sid) if step[1] in measure.HANDOFF_STEPS
-                                                    and data else ""))
+                                                    and data else "")
+                             + (measure_todo(root) if step[1] in measure.MEASURE_STEPS
+                                and step[1] not in rec["notified"] else ""))
             if step[1] not in rec["notified"]:
                 rec["notified"].append(step[1])
                 user.append(msg(step[1]))
@@ -513,7 +521,8 @@ def on_tool(inp):
     if step and step[1] not in rec["notified"]:
         rec["notified"].append(step[1])
         data = ctx("PostToolUse", "[Session Guard] Context: %s (during work). %s%s" % (
-            measure.kfmt(reading.context), step[2], measure.NOTICE_FORM % (step[0] // core.K)), msg(step[1]))
+            measure.kfmt(reading.context), step[2], measure.NOTICE_FORM % (step[0] // core.K)
+            + (measure_todo(root) if step[1] in measure.MEASURE_STEPS else "")), msg(step[1]))
         if step[3]:
             sessions.lock(rec, "context", "context %s" % measure.kfmt(reading.context))
             data.update({"continue": False, "stopReason": msg(step[1])})

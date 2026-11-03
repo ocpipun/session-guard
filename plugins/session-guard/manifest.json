@@ -108,7 +108,7 @@
    "path": "scripts/sg2/hooks.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "e429652c933e27a1d0f33f6f880b4dce43a4a2dd26a532a1133600dd41a16bff",
+   "sha256": "368e6023d30c0c3546297b4d0448454812452555f20fa208ff7eda856135f221",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -155,7 +155,7 @@
    "path": "scripts/sg2/measure.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "8eaddd478fd4b384f89fdfbd12041f6c133557b50aa1bfc1a9340f6801d175cd",
+   "sha256": "84257225d7500629d0dc305691edf77ddfeeca1986e343c9645830a71afb7e47",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -231,7 +231,7 @@
    "path": "scripts/sg2/rules.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "d2c2600c9d6c3ace6b1e5b8386f838e568ff7b0697baca4046aaf187a5de8830",
+   "sha256": "773fe45e9575fea4fc58b2262530683ce8c563d7d8221e0c5638aea17a31d85c",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -271,7 +271,7 @@
    "path": "skills/session-guard/SKILL.md",
    "type": "markdown",
    "session_guard": "2.0.0",
-   "sha256": "7726b376042b82af793b0f6dbf464c636bdd1c2857956777a01a0714f21058c5",
+   "sha256": "c8f985c76329d04c61cca41aefccea731a3e41bc469f3938dde831a5f399fe05",
    "signed": true,
    "depends": [
     "sg-entry"

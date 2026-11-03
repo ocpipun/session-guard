@@ -27,7 +27,8 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
   switched off): 250k/300k notice only; 700k notice, keep task notes current, no hand-off yet; 800k hand-off,
   then no work, only simple specific questions; 900k hard stop. The break rule does not apply in long mode.
   After the 300k hand-off (normal) or the 800k hand-off (long) Session Guard refuses "start long mode" and
-  "finish session" itself; the hand-off is not written a second time.
+  "finish session" itself; the hand-off is not written a second time, and the session measurement of
+  "finish session" is done with that hand-off.
 - Break (normal mode): gap > 1 hour and context > 100k -> do NOT run the user's command and do no reading or
   research for it; hand off every task you own (Session Guard already stored the command word for word).
   Context <= 100k -> remind in one line, then continue. Waiting for your own background job is not a break.

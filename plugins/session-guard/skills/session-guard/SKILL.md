@@ -27,12 +27,14 @@ Only on a Session Guard instruction or the user's request (250k is a notice only
    hand-off is not done: tell the user why in one line (no remote, push rejected, ...).
 3. Tell the user in one line: hand-off ready (task ids), continue in a new session. When a new session claims
    the task, this session is locked.
+4. 300k (normal) or 800k (long mode) hand-off: also the SESSION MEASUREMENT the instruction gives, as in "Finish
+   session" step 2 ("finish session" is refused after this hand-off).
 
 ## Break hand-off (BREAK RULE)
 Do not run the user's command; no reading or research for it. Session Guard already stored it word for word in
 each task you own. Do "Hand-off", tell the user to continue in a new session.
 
 ## Finish session
-Do nothing else the message asks. 1. "Hand-off". 2. Run the `--report` command from the instruction; read the
+Do nothing else the message asks. 1. "Hand-off". 2. Run the `report` command from the instruction; read the
 weekly and 5-hour quota with the usage tool if there is one; add one row to "Session measurements" in
 docs/STATUS_ARCHIVE.md ("n/a" for a value you cannot read; never invent one). 3. Tell the user: session closed.
