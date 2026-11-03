@@ -7,8 +7,9 @@ import os
 import re
 import sys
 
-from . import SG_VERSION, core, gitops, legacy, manifest, messages, migrate, render, rules, store
+from . import SG_VERSION, core, gitops, legacy, manifest, messages, migrate, place, render, rules, store
 
+ENTRY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "session_guard.py")
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -188,11 +189,17 @@ def cmd_install(a):
         cfg.update(installed=True, rules=rules.RULES_VERSION, version=SG_VERSION, date=core.today(),
                    executive=os.path.abspath(a.executive))
         core.save_config(cfg)
-        out("installed: config %s; global block %s; 1.x block %s" % (core.config_path(), res, rules.remove_v1_block()))
+        out("installed: config %s; global block %s; 1.x block %s; status line: %s" % (
+            core.config_path(), res, rules.remove_v1_block(), place.install_statusline(ENTRY)))
     elif a.action == "uninstall":
         cfg.pop("installed", None)
         core.save_config(cfg)
-        out("uninstalled: global block %s (project files and stores are kept)" % rules.remove_global_block())
+        out("uninstalled: global block %s; status line %s (project files and stores are kept)" % (
+            rules.remove_global_block(), place.uninstall_statusline()))
+    elif a.action == "cloud":
+        out("cloud copy: %s" % place.install_copy(os.path.abspath(a.code or os.getcwd())))
+    elif a.action == "home-guard":
+        out("computer guard: %s" % ("added" if place.ensure_home_guard(os.path.abspath(a.code)) else "unchanged"))
     elif a.action == "conflicts":
         rows = legacy.conflicts()
         out("\n".join("%-60s %-22s %s" % r for r in rows) or "no Session Guard 1.x components found")
@@ -306,7 +313,8 @@ def parser():
     m.add_argument("--claude-session")
 
     n = sub.add_parser("install")
-    n.add_argument("action", choices=["approve", "uninstall", "conflicts", "language", "messages"])
+    n.add_argument("action", choices=["approve", "uninstall", "conflicts", "language", "messages", "cloud",
+                                      "home-guard"])
     n.add_argument("code", nargs="?")
     n.add_argument("--executive")
 

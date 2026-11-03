@@ -15,7 +15,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from sg2 import cli, hooks  # noqa: E402
+from sg2 import cli, hooks, place  # noqa: E402
 
 COMMANDS = ("task", "idea", "handoff", "migrate", "install", "manifest", "report", "-h", "--help")
 
@@ -27,7 +27,14 @@ def main():
     args = [a for a in args if a != "--project"]
     if args and args[0] in COMMANDS:
         return cli.run(args)
+    if args[:1] == ["statusline"]:
+        try:
+            return place.statusline()
+        except Exception:  # a status line never shows an error
+            return 0
     try:
+        if hooks.PROJECT_MODE and place.plugin_installed(__file__):
+            return 0  # the plugin guards this computer; the repository copy stays quiet (never twice)
         inp = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace") or "{}")
         return hooks.dispatch(inp, args)
     except Exception:  # the guard must never break the user's work

@@ -41,12 +41,13 @@
    "path": "scripts/session_guard.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "50cbf9c8d3a611dde001397a7f796f29b4296b15f503f733d544d9e8704e4fbc",
+   "sha256": "9fad009d91d8d6e79a2cc1deff352eb866ef673122f6d1362e28d965165ba39f",
    "signed": true,
    "depends": [
     "sg2-cli",
     "sg2-hooks",
-    "sg2-package"
+    "sg2-package",
+    "sg2-place"
    ]
   },
   {
@@ -65,7 +66,7 @@
    "path": "scripts/sg2/cli.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "726745b111059d470bf78b7c4692e81396a1517543a654c4755560212ff2f914",
+   "sha256": "e3594185887d7dced398512666407046dd153161575e611251bb05bd9aaee688",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -75,6 +76,7 @@
     "sg2-messages",
     "sg2-migrate",
     "sg2-package",
+    "sg2-place",
     "sg2-render",
     "sg2-rules",
     "sg2-store"
@@ -106,7 +108,7 @@
    "path": "scripts/sg2/hooks.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "38444d0c1f01f9ce3528c194524a90278e2474212b788eeea48628b9ec46d0dc",
+   "sha256": "fcc5a4b32ce4a7c1cf6c78bd1ec62e05ae8ed12fe706ffeebbdd96ddcd51989c",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -179,7 +181,7 @@
    "path": "scripts/sg2/migrate.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "e48b35a8e9cfa569fbe8b7424f2a92dce68a9005295bfd7ca80905bf8201ffac",
+   "sha256": "daa41dd74b5c242b24af43a1863b9ca58800279adfadf4a96434b2688abca7d6",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -187,9 +189,26 @@
     "sg2-legacy",
     "sg2-measure",
     "sg2-package",
+    "sg2-place",
     "sg2-render",
     "sg2-sessions",
     "sg2-store"
+   ]
+  },
+  {
+   "id": "sg2-place",
+   "version": "2.0.0",
+   "path": "scripts/sg2/place.py",
+   "type": "python",
+   "session_guard": "2.0.0",
+   "sha256": "a236616aa3656cfbe0fc342711ef26fec10aa8f2bf2cbcf20b14fff5e2c7694a",
+   "signed": true,
+   "depends": [
+    "sg2-core",
+    "sg2-legacy",
+    "sg2-measure",
+    "sg2-package",
+    "sg2-rules"
    ]
   },
   {

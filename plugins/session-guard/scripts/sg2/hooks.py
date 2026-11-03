@@ -152,7 +152,9 @@ def task_lines(data, sid):
 
 def start_context(root, rec, data, source):
     parts = [rules.RULES]
-    if not PROJECT_MODE:
+    if PROJECT_MODE:
+        parts.append(rules.GENERAL_RULES)  # no global CLAUDE.md in a cloud session
+    else:
         res = rules.ensure_global_block()
         if res == "broken":
             parts.append("WARNING: the session-guard2 markers in ~/.claude/CLAUDE.md are damaged; tell the user "

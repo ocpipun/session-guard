@@ -489,6 +489,73 @@ class Migration(Base):
         self.assertIn("phase: running", self.sg("migrate", "status"))
 
 
+class Places(Base):
+    def settings(self):
+        p = os.path.join(self.home, ".claude", "settings.json")
+        return json.load(open(p)) if os.path.exists(p) else {}
+
+    def put_settings(self, data):
+        json.dump(data, open(os.path.join(self.home, ".claude", "settings.json"), "w"))
+
+    def test_status_line_installed_v1_repointed_other_left_alone(self):
+        self.assertIn("session-guard2-statusline", self.settings()["statusLine"]["command"])
+        self.put_settings({"statusLine": {"type": "command", "command": "python old.py # session-guard-statusline"}})
+        self.assertIn("re-pointed from 1.x", self.sg("install", "approve", "--executive", self.exe))
+        self.put_settings({"statusLine": {"type": "command", "command": "ccstatus"}})
+        self.assertIn("another tool", self.sg("install", "approve", "--executive", self.exe))
+        self.assertEqual(self.settings()["statusLine"]["command"], "ccstatus")
+
+    def test_status_line_saves_quota_readings(self):
+        data = {"rate_limits": {"five_hour": {"used_percentage": 42, "resets_at": time.time() + 3600},
+                                "seven_day": {"used_percentage": 7, "resets_at": time.time() + 86400}}}
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "statusline"], input=json.dumps(data).encode(),
+                           capture_output=True, env=self.env)
+        self.assertIn("5-hour 42% · weekly 7%", r.stdout.decode("utf-8"))
+
+    def test_git_migration_adds_computer_guard_that_blocks_cloud(self):
+        root = self.project("cg", git=True, files={".claude/settings.json": json.dumps({"hooks": {"UserPromptSubmit": [
+            {"hooks": [{"type": "command", "command": "exit 0 # session-guard-home"}]}]}, "model": "x"})})
+        self.sg("migrate", "discover", "--add", root, ok=True)
+        self.sg("migrate", "survey", root, ok=True)
+        plan = os.path.join(self.home, "p.json")
+        json.dump({"tasks": []}, open(plan, "w"))
+        self.assertIn("computer guard added", self.sg("migrate", "apply", root, "--plan", plan, "--session", S3, ok=True))
+        st = json.load(open(os.path.join(root, ".claude", "settings.json")))
+        cmds = [h["command"] for g in st["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+        self.assertEqual(len(cmds), 1)                       # the 1.x guard was replaced, not doubled
+        self.assertIn("session-guard2-home", cmds[0])
+        self.assertEqual(st["model"], "x")                   # the user's settings are kept
+        r = subprocess.run(["bash", "-c", cmds[0]], capture_output=True, env=dict(self.env, CLAUDE_CODE_REMOTE="true"))
+        self.assertEqual(json.loads(r.stdout.decode())["decision"], "block")
+        r = subprocess.run(["bash", "-c", cmds[0]], capture_output=True, env=self.env)
+        self.assertEqual(r.stdout, b"")
+
+    def test_cloud_copy_idempotent_replaces_v1_and_quiet_beside_plugin(self):
+        root = self.project("cloudp", git=True, files={".claude/settings.json": json.dumps({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": "python .claude/session-guard/session_guard.py --project"}]}]}})})
+        self.assertIn("hooks added: 7", self.sg("install", "cloud", root))
+        self.assertIn("hooks added: 0", self.sg("install", "cloud", root))
+        st = json.load(open(os.path.join(root, ".claude", "settings.json")))
+        self.assertNotIn(".claude/session-guard/session_guard.py", json.dumps(st))
+        copy = os.path.join(root, ".claude", "session-guard2", "bin", "scripts", "session_guard.py")
+        env = dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=root)
+        run = lambda event, cid, **kw: subprocess.run(
+            [sys.executable, "-I", copy, "--project"], capture_output=True, env=env, input=json.dumps(dict(
+                {"hook_event_name": event, "session_id": cid, "transcript_path": "x", "cwd": root,
+                 "source": "startup", "prompt": "hi"}, **kw)).encode()).stdout.decode()
+        self.assertIn("Session Guard 2.0", run("SessionStart", "c1"))
+        self.assertIn("MIGRATION PENDING", run("SessionStart", "c1"))
+        fake = os.path.join(self.home, ".claude", "plugins", "cache", "sg", "scripts")
+        os.makedirs(fake)
+        open(os.path.join(fake, "session_guard.py"), "w").close()
+        self.assertEqual(run("SessionStart", "c2"), "")       # the plugin guards this machine: the copy is quiet
+
+    def test_computer_project_gets_no_cloud_copy(self):
+        root = self.project("cp", git=True, files={".claude/settings.json": json.dumps({"hooks": {"UserPromptSubmit": [
+            {"hooks": [{"type": "command", "command": "x # session-guard2-home"}]}]}})})
+        self.assertIn("computer project", self.sg("install", "cloud", root))
+
+
 class Manifest(Base):
     def copy(self):
         dst = os.path.join(self.home, "plugin")

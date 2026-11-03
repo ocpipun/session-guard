@@ -23,7 +23,7 @@ import os
 import re
 import shutil
 
-from . import core, gitops, legacy, measure, render, store
+from . import core, gitops, legacy, measure, place, render, store
 
 BUDGET = 800 * core.K
 SAFE_AT = 0.9
@@ -291,6 +291,8 @@ def apply(root, plan, migrator_session):
             d["migration_sessions"].append(migrator_session)
         return mig["id"]
     mig_id = store.mutate(root, fn)
+    if plan.get("home", "computer") == "computer" and place.ensure_home_guard(root):
+        report["warnings"].append("computer guard added to .claude/settings.json (blocks cloud sessions once pushed)")
     for line in plan.get("completed") or []:
         core.append_text(render.doc(root, "COMPLETED_TASKS.md"),
                          "- %s %s imported (pre-2.0): %s\n" % (core.today(), render.SIGN, line))

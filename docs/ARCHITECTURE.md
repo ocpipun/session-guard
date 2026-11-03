@@ -61,11 +61,11 @@ session is locked when its last open task is claimed. After "finish session" the
 | Global CLAUDE.md block | REUSED, CHANGED | new markers `session-guard2`; 1.x block removed only after 2.0 block exists |
 | Notices / languages | DIRECTLY REUSED | new notices; tr.json extended |
 | Project files creation at session start | REMOVED | 2.0 never writes into a project before its migration |
-| One home per project (computer/cloud) | REUSED, CHANGED | `home` field in the store; inline cloud-blocking hook NOT YET ported |
+| One home per project (computer/cloud) | REUSED, CHANGED | `home` field in the store; cloud-blocking hook `session-guard2-home` (replaces the 1.x one in place) |
 | Setup gate, conflict scan (`--scan`) | REWRITTEN | install + migration survey (content-based) |
 | `--push` / `--claim` | REWRITTEN | `gitops.commit_paths` + `push_verified` |
-| `cloud_setup.py` (repository copy) | REWRITE PENDING | not in 2.0 yet |
-| Terminal status line | REWRITE PENDING | 1.x line points to the 1.x script; 2.0 has none yet |
+| `cloud_setup.py` (repository copy) | REWRITTEN | `sg install cloud` (`sg2/place.py`): copy in `.claude/session-guard2/bin/`, 1.x copy hooks replaced, quiet beside the plugin |
+| Terminal status line | REUSED, CHANGED | mark `session-guard2-statusline`; a 1.x line is re-pointed, another tool's line untouched |
 | v1.2 design doc, v1.4 tests | REMOVED on the branch | still on `main` |
 
 ## 6. Old/new conflicts (checked by `sg install conflicts`, tested)
@@ -77,7 +77,9 @@ session is locked when its last open task is claimed. After "finish session" the
 - Repository copies: 1.x cloud copy (`.claude/session-guard/`) stays quiet on a computer because 2.0's entry is
   still named `session_guard.py` (v1.4 `plugin_installed()`); migration verify refuses while it is present.
 - Hooks in user settings that run a `session_guard.py` (hand-made copies) are listed for approval.
-- Status line: 1.x one detected; re-pointing pending (see 5).
+- Status line: a 1.x line is re-pointed to 2.0 at install; another tool's line is left alone.
+- Read-only discovery on the development computer (2026-11-03): 12 projects (7 git with the 1.x computer guard,
+  5 without git), 1.x plugin, state folder, global block and status line present; nothing was written.
 
 ## 7. Migration plan and risks
 Order: install approve (control project) → discover → per project survey → subagent reading → plan → user yes →
