@@ -1,5 +1,5 @@
 {
-  "description": "Session Guard: measures context and breaks, enforces hand-off thresholds, locks finished sessions.",
+  "description": "Session Guard 2.0: context, breaks, quota, session locks, task ownership and hand-offs.",
   "hooks": {
     "SessionStart": [
       {
@@ -23,9 +23,21 @@
           {
             "type": "command",
             "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; [ -f \"$S\" ] || exit 0; if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"$S\" --watch; else python3 -I \"$S\" --watch; fi",
+            "timeout": 90000,
             "async": true,
-            "asyncRewake": true,
-            "timeout": 90000
+            "asyncRewake": true
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; [ -f \"$S\" ] || exit 0; if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"$S\"; else python3 -I \"$S\"; fi",
+            "timeout": 10
           }
         ]
       }
@@ -38,6 +50,28 @@
             "type": "command",
             "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; [ -f \"$S\" ] || exit 0; if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"$S\"; else python3 -I \"$S\"; fi",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; [ -f \"$S\" ] || exit 0; if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"$S\"; else python3 -I \"$S\"; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; [ -f \"$S\" ] || exit 0; if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"$S\"; else python3 -I \"$S\"; fi",
+            "timeout": 2
           }
         ]
       }

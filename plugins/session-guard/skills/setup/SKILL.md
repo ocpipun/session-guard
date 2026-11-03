@@ -1,108 +1,47 @@
 ---
 name: setup
-description: Session Guard one-time setup and project review - finds rules, similar files, skills, scripts and hooks that conflict with Session Guard, removes them with the user's approval, installs the general rules block and the terminal status line. Use when a "[Session Guard]" message says SETUP PENDING or PROJECT REVIEW PENDING, or when the user asks to set up or review Session Guard.
+description: Session Guard 2.0 install, conflict review with 1.x, project migration and notices. Use when a "[Session Guard]" message says SETUP PENDING, MIGRATION PENDING, INSTALLATION PAUSED or CONTINUE INSTALLATION, or when the user asks to install, update, migrate or uninstall Session Guard.
 ---
+<!-- SESSION-GUARD: 2.0 | component: skill-setup | version: 2.0.0 -->
 
-# Session Guard setup
+# Session Guard 2.0 setup
 
-Session Guard stays inactive until this is done. It starts by itself: a "[Session Guard] SETUP PENDING" or
-"PROJECT REVIEW PENDING" message means run it now, without asking whether to. Never record "approved" without the
-user's explicit yes in this conversation; never delete or change anything before that yes.
+Runs only in the control project `session-guard-executive`. Never change or delete anything before the user's
+explicit yes in this conversation; every push needs its own yes.
 
-`SG` below is the script command from the "[Session Guard]" message (`python "<path>/session_guard.py"`, with
-`--project` in a repository copy). Without a message: `${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py`; if that
-was not filled in, search `~/.claude/plugins` for `session-guard/scripts/session_guard.py`.
+## Install / update from 1.x
+1. `sg manifest verify` must say OK (a changed or unsigned file stops the install). `sg install conflicts`: the
+   table of what belongs to 1.x and what 2.0 replaces.
+2. Show the user one numbered list: the table, the 2.0 global block in `~/.claude/CLAUDE.md` (the 1.x block is
+   removed only after the 2.0 block is written), and what migration will do (below). One approval question.
+3. Yes: `sg install approve --executive "<this folder>"`, "Notices", then "Migration". The plugin itself is
+   updated last (`claude plugin update session-guard@session-guard`; the program in `$CLAUDE_CODE_EXECPATH` when
+   `claude` is not on the PATH); then the user fully restarts Claude. 1.x and 2.0 never guard at once: while a 1.x
+   plugin is installed, 2.0 stays passive.
 
-## What counts as a conflict
-Compare with the Session Guard rules (`SG --print-rules`). An item conflicts when it covers a topic those rules
-cover and says something different, repeats it (a duplicate), or does Session Guard's job another way:
-- context or token limits; when to hand off, stop or open a new session; breaks; long mode; ending or locking a session;
-- reading STATUS at session start; the roles of CLAUDE.md, STATUS.md, STATUS_ARCHIVE.md; STATUS kept as a log;
-  separate hand-off files; a second archive; "a project CLAUDE.md wins over the global one" on these topics;
-- reply style (labels, length) other than Session Guard's; presenting guesses as facts;
-- session measurement rules, scripts or hooks that duplicate `SG --report`;
-- skills, commands, agents, scripts or hooks that measure context, track breaks, write hand-off notes or lock
-  sessions (for example an older hand-made Session Guard copy).
-Not a conflict: project facts and decisions; what a project's STATUS.md contains and how it looks (the rules allow
-a project to set this); rules on other topics. When unsure, list the item as "unsure" and let the user decide.
+## Migration (one project at a time; the project's current, checked state is the source)
+1. `sg migrate discover` (`--add <folder>` for projects found elsewhere); `sg migrate status` shows the list.
+2. Per project: `sg migrate survey "<folder>"`. Give a subagent the survey JSON and have it read the files it
+   names (STATUS and hand-off files, task lists, README, CLAUDE.md, AGENTS.md, GEMINI.md, skills, hooks, scripts,
+   recent commits) by content, not by name. If an old session of that project still runs and is reachable, ask it
+   for its hand-off instead. The report: current goal, finished work, open work, contradictions, unknowns. Do not
+   rebuild old sessions' hand-offs one by one.
+3. Write the plan JSON (`sg migrate plan-help`): at most 3 active tasks, the rest as ideas; contradictions and
+   unknowns listed, never settled by guessing. Show it to the user; on their yes `sg migrate apply "<folder>"
+   --plan <file>` (git: rollback tag; always: file copies; a project without git has NO git rollback: say so),
+   then `sg migrate verify "<folder>"`.
+4. Git projects, on the user's yes: `sg migrate push "<folder>" --approval "<their words>"`. Only Session Guard's
+   paths are committed; "NOT VERIFIED" means not done.
+5. Old sessions of a migrated project are locked at their next prompt. Cloud sessions opened before cannot be
+   locked from the computer (no documented API): tell the user to archive them at claude.ai/code.
+6. Every project verified or skipped (`sg migrate skip "<folder>" --reason ...`): `sg migrate finish`.
+Budget: at the 90% notice finish the current step, `sg migrate pause --reason budget`; the user continues in a
+new session of this folder with "continue installation".
 
-## Similar files (every project)
-The scan marks files that do the job of CLAUDE.md / STATUS / ARCHIVE under another name ("[same job ...]": AGENTS.md,
-GEMINI.md, .cursorrules, .cursor/rules, .windsurfrules, .clinerules, .github/copilot-instructions.md, HANDOFF*,
-NOTES*, TODO*, PROGRESS*, CONTEXT.md, MEMORY.md, any status file). Read each in full. In the list, say for each line
-or part: delete (conflict or duplicate), move (current work, open issues, next steps go to docs/STATUS.md;
-decisions, measurements, history go to docs/STATUS_ARCHIVE.md; permanent project facts go to CLAUDE.md) or keep.
-A file emptied by moves is deleted. Another tool's own rule file (AGENTS.md and the like) is kept and only edited,
-unless the user wants it gone.
-
-## Notices (part of every approved full setup, and of the project review in a repository copy)
-The app shows some Session Guard notices itself (blocked prompts, locks, thresholds); Claude never sees them. Their
-language is chosen once, here, and never checked again: `SG --set-language` reads the Claude desktop app's language
-setting one time. Terminal: English. Where the app language cannot be read (always with `--project`, the cloud;
-or the app's settings file is missing or was moved by an app update), add this question, in English and word for
-word, to the approval question: "Which language would you like session-guard notices in?"
-and run `SG --set-language <code>` with the answer (ISO code, e.g. `fr`; `english` for none). If it reports notices without a translation, translate them into that
-language, keep every `%(name)s` / `%(name)d` placeholder (`%%` is a literal percent sign) and leave "Session Guard",
-"finish session" and "start long mode" untranslated; write a JSON object {name: text} to a temporary file,
-`SG --set-messages <file>`, delete the file. Do not show the translations to the user.
-Later, only when the user asks for another language: `SG --set-language <code>` (e.g. `fr`; `english` turns
-translations off), then translate as above if notices are missing. Until translated they are English. A
-session-start message "notices without a translation" (after an update) means: translate the listed ones, silently.
-
-## Full setup (first time, or after the rules changed)
-1. `SG --scan`: the global `~/.claude` items and every project Claude Code has sessions for, with matching lines.
-   A project marked "[CLOUD COPY: used on this computer and in the cloud]" was worked on in both places.
-2. Read every listed CLAUDE.md and memory file and every "[same job ...]" file in full, and every listed skill,
-   command, agent, script, output style, rule file or hook whose name or matching lines touch the topics above.
-3. Show the user one numbered list: file and line, the text in short, why it conflicts or where it moves, what you
-   will do (delete the line, section, file or folder; rewrite a line so it only points to Session Guard; move it).
-   Then say, in short:
-   - the global CLAUDE.md gets the Session Guard block (created if missing; the user's other rules stay);
-   - missing CLAUDE.md, docs/STATUS.md, docs/STATUS_ARCHIVE.md are created;
-   - on a computer: each project that is a git repository gets a one-line hook in its `.claude/settings.json`
-     that blocks cloud sessions of it (a project lives either on the computer or in the cloud); a repository
-     that already has the cloud copy is a cloud project and is blocked on the computer;
-   - on a computer, VITAL: the guard works only once it is on GitHub, so for each git project with a remote,
-     Session Guard's files there (`.claude/settings.json`, CLAUDE.md, docs/STATUS.md, docs/STATUS_ARCHIVE.md) and the
-     files this setup changes there are committed and pushed now, one project at a time, to its default branch.
-     The user's other changes are not committed. Later, a new project's guard is pushed the same way at its first
-     session. Name each repository that gets a push;
-   - each "[CLOUD COPY ...]" project (used in both places) becomes a computer project: its cloud copy is removed,
-     the guard added and pushed, so its cloud sessions are blocked (unless the user wants it to stay a cloud
-     project: then it stays blocked on this computer). Say that cloud sessions opened before cannot be locked
-     from here: the user archives them at claude.ai/code;
-   - on a computer (not in a repository copy): Session Guard writes a status line command into
-     `~/.claude/settings.json` (key `statusLine`). Why: in the terminal it gives Session Guard the 5-hour and weekly
-     quota at zero token cost, so a session can stop before the quota runs out (the desktop app does not run status
-     lines; there Claude reads the usage tool). If another status line is already set, it is left alone and the
-     terminal gives no quota readings. The code is public on GitHub
-     (https://github.com/ocpipun/session-guard), MIT license;
-   - approved items are deleted for good, with no backup (the user's decision); without approval Session Guard
-     stays off.
-4. Ask one question: approve the list? The user may say an item is not a conflict: drop it. If the user keeps an
-   item you still consider a conflict, explain once why; if they still keep it, that is a decline.
-5. Yes: `SG --create-files "<project>"` for each project that gets moved content, then delete, rewrite or move
-   exactly the approved items, nothing else (no backup copies). `SG --install-global` (if it reports damaged
-   markers, remove the broken `session-guard` marker lines by hand and run it again), `SG --install-statusline`
-   (not with `--project`), "Notices", `SG --setup approved --all`. Not with `--project`: `SG --claim "<project>"`
-   for each approved "[CLOUD COPY ...]" project, then for each git project `SG --push "<project>" <files you changed
-   there>`, one at a time. Report every result; a "NOT PUSHED" or "NOT COMMITTED" line goes to the user with what
-   to do (it is vital: until the push, cloud sessions of that repository are not blocked).
-   Tell the user what was deleted, moved, changed or pushed. Run from
-   INSTALL.md (the installing session): its restart message is the last step, and sessions that started before
-   the install are locked until then. Run from a "SETUP PENDING" message after a restart: Session Guard is on at
-   once and the rules arrive with the next message; then handle the user's original message, if still open.
-6. No: change nothing; `SG --setup declined`. Tell the user Session Guard stays off and `/session-guard:setup`
-   runs this again.
-
-## Project review (one project; message says PROJECT REVIEW PENDING)
-Same steps for that folder only: `SG --scan "<folder>"`, read, list (the status line and global block are not part
-of it), ask. Yes: `SG --create-files "<folder>"`, the changes, with `--project` also "Notices",
-`SG --setup approved "<folder>"`. No:
-`SG --setup declined "<folder>"` (Session Guard stays off in that project only).
-In a repository copy (`--project`, cloud): commit the changes, the project files, and `.claude/session-guard/` (setup.json, language.json, messages/)
-with the session's work, or the next cloud session asks again.
+## Notices
+`sg install language` reads the app language once (else ask, in English, word for word: "Which language would you
+like session-guard notices in?" and run `sg install language <code>`). Missing translations: a JSON {name: text}
+keeping every `%(name)s` / `%(name)d`, `sg install messages <file>`, then delete the file.
 
 ## Uninstall (on request)
-`SG --uninstall-statusline`, then `claude plugin uninstall session-guard@session-guard`;
-remove the block between `<!-- session-guard:begin` and `<!-- session-guard:end -->` from `~/.claude/CLAUDE.md`.
+`sg install uninstall`, then `claude plugin uninstall session-guard@session-guard`. Project stores and files stay.
