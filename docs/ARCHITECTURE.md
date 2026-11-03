@@ -1,0 +1,117 @@
+<!-- SESSION-GUARD: 2.0 | component: doc-architecture | version: 2.0.0 -->
+# Session Guard 2.0 — architecture, migration plan, risks
+
+Status: development branch `v2.0-dev`. Not installed anywhere, nothing pushed, no real project migrated.
+
+## 1. Layers
+
+| Layer | Where | What |
+|---|---|---|
+| Measurement (from v1.4) | `sg2/measure.py` | context from the transcript, break gap, background jobs, quota readings, thresholds |
+| Session records | `~/.claude/session_guard_v2/sessions/` (`sg2/sessions.py`) | SESSION-ID per Claude session, long mode, locks |
+| Project store | `<repo>/.claude/session-guard2/store.json` (`sg2/store.py`) | PROJECT-ID, sessions, TASK-IDs, owners, hand-offs, ideas, revision |
+| Project files | `docs/*.md` (`sg2/render.py`) | generated from the store; archive and completed list append-only |
+| Hooks | `sg2/hooks.py` | SessionStart, UserPromptSubmit (+24 h watch), PreToolUse, PostToolUse, Stop, SessionEnd |
+| Commands | `sg2/cli.py` (`sg task / idea / handoff / migrate / install / manifest / report`) | every change of tasks |
+| Migration | `sg2/migrate.py`, `~/.claude/session_guard_v2/migration.json` | discover, survey, apply, verify, push, checkpoint, budget |
+| Integrity | `manifest.json`, `sg2/manifest.py` | id, version, path, type, SG version, sha256, dependencies; signature check |
+
+Measurement works in every project from install on (no gap in protection). PROJECT-ID, tasks and hand-offs
+start per project only after its migration is verified.
+
+## 2. Ids
+- PROJECT-ID `PRJ-XXXXXXXX` (random), in the store, committed with the repository, so every place sees one id.
+- SESSION-ID `S-YYYYMMDD-xxxxxx` per Claude session (documented `session_id`); kept on resume; a reopened
+  conversation under a new id is found through its message ids (v1.4). Parent/child: a session that claims a
+  hand-off becomes the child of its source; other sessions stay independent (no forced chains).
+- TASK-ID `TASK-001`, `TASK-001-1`, `TASK-001-2-1`. Counters only grow; ids are never reused. Old 1.x session
+  ids are listed in `legacy_sessions` only.
+
+## 3. Task rules (enforced in code, tested)
+- Owner only changes a task; claiming is free when there is no owner, the owner ended or is locked, or a hand-off
+  waits; an active owner keeps it unless the user approves a takeover. Owner history is never deleted.
+- At most 3 normal + 1 urgent (reason + approval, only when 3 normal are active) main tasks; setup and migration
+  tasks exempt; subtasks unlimited. A new main task needs the user's approval text; unrelated work → backlog.
+- A subtask closing never closes its parent; a parent with open subtasks closes only with `--force`.
+- Redo/extension of a finished task = new id with `reopens`/`extends` link both ways.
+- Concurrency: one O_EXCL lock file per store, fresh read inside the lock, validation, revision + atomic replace;
+  `--expect-rev` refuses a decision made on an older read. Direct edits of the store are denied (PreToolUse);
+  a hand edit of the STATUS task block is rebuilt from the store (PostToolUse / next prompt).
+
+## 4. Hand-off
+Fields: PROJECT-ID, TASK-ID, source SESSION-ID, its parent/children, last developer, status, done, pending,
+owner, branch, PR (gh when available), technical notes (required), the user's command word for word (break).
+States: prepared → published (push verified with `git ls-remote`) or local (no git / no remote) → claimed
+(archived in STATUS_ARCHIVE.md, append only). Not repeated when unchanged or when the task is finished. The source
+session is locked when its last open task is claimed. After "finish session" the Stop hook keeps Claude working
+(twice at most) until every owned task has a published hand-off.
+
+## 5. v1.4 review
+
+| Component | Verdict | Note |
+|---|---|---|
+| Context measurement, thresholds, long mode | DIRECTLY REUSED | numbers and texts kept; hand-off made per task |
+| Break rule | REUSED, CHANGED | the hook itself stores the user's command word for word in each owned task |
+| Quota (Session Follow) | DIRECTLY REUSED | same thresholds; state moved to `session_guard_v2/follow` |
+| Session lock types | REUSED, EXTENDED | + handed, legacy, home |
+| Reopened conversation by message ids | DIRECTLY REUSED | |
+| 24-hour watch (asyncRewake) | DIRECTLY REUSED | |
+| Restart lock (session older than install) | DIRECTLY REUSED | |
+| Rules text, reply style, archive rule | REUSED, CHANGED | ids, tasks, generated STATUS added |
+| Global CLAUDE.md block | REUSED, CHANGED | new markers `session-guard2`; 1.x block removed only after 2.0 block exists |
+| Notices / languages | DIRECTLY REUSED | new notices; tr.json extended |
+| Project files creation at session start | REMOVED | 2.0 never writes into a project before its migration |
+| One home per project (computer/cloud) | REUSED, CHANGED | `home` field in the store; inline cloud-blocking hook NOT YET ported |
+| Setup gate, conflict scan (`--scan`) | REWRITTEN | install + migration survey (content-based) |
+| `--push` / `--claim` | REWRITTEN | `gitops.commit_paths` + `push_verified` |
+| `cloud_setup.py` (repository copy) | REWRITE PENDING | not in 2.0 yet |
+| Terminal status line | REWRITE PENDING | 1.x line points to the 1.x script; 2.0 has none yet |
+| v1.2 design doc, v1.4 tests | REMOVED on the branch | still on `main` |
+
+## 6. Old/new conflicts (checked by `sg install conflicts`, tested)
+- Plugin id stays `session-guard@session-guard`: `claude plugin update` replaces 1.4 with 2.0; while any 1.x entry
+  is installed, 2.0 is passive (no double guard).
+- State: 1.x `~/.claude/session_guard/` is read only (its finish/break/context locks are honoured); 2.0 writes only
+  `~/.claude/session_guard_v2/`.
+- Global block: different markers; removal of the 1.x block refused unless the 2.0 block is present.
+- Repository copies: 1.x cloud copy (`.claude/session-guard/`) stays quiet on a computer because 2.0's entry is
+  still named `session_guard.py` (v1.4 `plugin_installed()`); migration verify refuses while it is present.
+- Hooks in user settings that run a `session_guard.py` (hand-made copies) are listed for approval.
+- Status line: 1.x one detected; re-pointing pending (see 5).
+
+## 7. Migration plan and risks
+Order: install approve (control project) → discover → per project survey → subagent reading → plan → user yes →
+apply (git tag + file copies) → verify → user yes → push (verified) → next project → finish. The checkpoint lives
+in `migration.json`; at 90% of 800k tokens per installation session a safe stop, at 100% an automatic pause;
+while paused every prompt is blocked except "continue installation" in `session-guard-executive`. Projects first
+seen later (a session start in an unknown project) join the list as "found later".
+
+Risks:
+1. Old cloud sessions cannot be locked from the computer (no documented API). Only the user can archive them.
+   A cloud session already open keeps its own checkout; it can still push to the repository.
+2. Non-git projects: no rollback beyond the file copies in `session_guard_v2/backups/`.
+3. The transcript schema is undocumented; a Claude Code change can break context/break measurement (as in 1.4).
+4. Locking is enforced only by hooks: a session started with hooks disabled or a different plugin set is not
+   locked.
+5. Git merge conflicts in `store.json` between branches are not resolved automatically.
+6. The plan is written by Claude from file contents; contradictions are listed, not resolved; the user approves.
+
+## 8. Not verifiable / unverified
+- `CLAUDE_CODE_ENTRYPOINT` (desktop detection) is not documented.
+- Transcript entry format (context, message ids, background jobs) is not documented.
+- Whether two installed plugins' hooks for one event both run is only implied by the docs.
+- Locking or archiving a cloud session through an API: not documented (none found).
+- `UserPromptSubmit` inside subagents: not documented. Hooks inside subagents carry `agent_id` (documented).
+- A blocked prompt is still written to the transcript ("Original prompt:"), it is not erased (documented).
+- SessionEnd runs with a short budget and cannot block; a crash may skip it (then tasks are not marked orphaned).
+- The desktop app's own sessions sidebar archive is not a lock (user requirement; nothing can be checked here).
+- Remote Control: hooks run on the computer (documented); `CLAUDE_CODE_BRIDGE_SESSION_ID` only during an active
+  connection.
+
+## 9. Install / uninstall (to be done only with the user's approval)
+Install: in `session-guard-executive`, `sg manifest verify`, `sg install conflicts`, one approval, `sg install
+approve --executive <folder>`, notices, migration, then `claude plugin marketplace update session-guard` +
+`claude plugin update session-guard@session-guard`, full restart.
+Uninstall: `sg install uninstall` (removes the 2.0 global block), `claude plugin uninstall
+session-guard@session-guard`. Project stores and docs stay; remove `.claude/session-guard2/` by hand if wanted.
+Rollback of a migrated git project: `git reset --hard sg2-pre-migration-<date>` after saving later work.
