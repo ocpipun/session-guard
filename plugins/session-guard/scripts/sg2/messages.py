@@ -17,8 +17,8 @@ MESSAGES = {
     "n300": "Context 300k: preparing hand-off. No new tasks from now on.",
     "n250": "Context passed 250k.",
     "l900": "Context 900k: long-mode hard limit. Session closed, open a new session.",
-    "l800": "Context 800k: work stopped. Information questions only; hand-off will be finished before 900k.",
-    "l700": "Context 700k: making work hand-off ready.",
+    "l800": "Context 800k: work stopped, preparing hand-off. Information questions only from now on.",
+    "l700": "Context 700k: work goes on; the hand-off is prepared at 800k.",
     "l300": "Context passed 300k (long mode: no hand-off).",
     "l250": "Context passed 250k (long mode).",
     "hard_limit": "Context %(k)s, hard limit. Session closed, open a new session.",
@@ -29,6 +29,11 @@ MESSAGES = {
     "closed_legacy": "This conversation began before its project moved to Session Guard 2.0, so it is locked. "
                      "Open a new session; it gets the current tasks and hand-offs.",
     "closed_home": "This project lives in the %(home)s, not here. Your message was not sent.",
+    "long_refused": "Long mode cannot be switched on: the hand-off was already prepared at 300k. Your message was not "
+                    "sent. This session only answers questions until 400k; continue the work in a new session (long "
+                    "mode can be started there).",
+    "finish_refused": "\"finish session\" is not available: the hand-off was already prepared at %(k)s. Your message "
+                      "was not sent. Ask your question without the command, or open a new session.",
     "finishing": "Finishing session: preparing hand-offs. Later messages will not be delivered.",
     "break_lock": "Break over 1 hour and context %(k)s: command not run, it goes into the hand-off notes.",
     "break_remind": "Break over 1 hour; context %(k)s, continuing in this session.",

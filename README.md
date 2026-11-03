@@ -9,16 +9,18 @@ an id and guards who owns which task, so parallel or later sessions never overwr
 
 ## What it does
 
-### Context thresholds (unchanged from 1.4)
+### Context thresholds (from 1.4; long mode changed)
 | Context | Normal mode | Long mode |
 |---|---|---|
 | 250k | notice | notice |
 | 300k | hand-off of every task the session owns; no new tasks | notice |
 | 350k | target stop | — |
 | 400k | hard stop, session locked | — |
-| 700k | — | notice; work made hand-off ready |
-| 800k | — | no work, simple questions, final hand-offs |
+| 700k | — | notice; task notes kept current, no hand-off yet (changed from 1.4) |
+| 800k | — | hand-off of every task the session owns; then no work, simple questions |
 | 900k | — | hard stop, session locked |
+
+After the 300k hand-off (normal mode) or the 800k hand-off (long mode), "start long mode" and "finish session" are refused: the hand-off is never written twice.
 
 ### Breaks (unchanged from 1.4)
 Normal mode, gap over 1 hour: context over 100k → the message is not run; Session Guard itself stores it word for

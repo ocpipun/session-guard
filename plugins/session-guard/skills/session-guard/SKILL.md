@@ -18,7 +18,7 @@ description: Session Guard 2.0 procedures - task work, hand-off, break hand-off 
 - Redo or extend a finished task: `sg task reopen <id> --title "..." --relation reopens|extends --approval "..."`.
 - Never edit the task block of docs/STATUS.md or `.claude/session-guard2/`; free notes go under "## Notes".
 
-## Hand-off (300k, 700k, 800k, finish, break, or on request)
+## Hand-off (300k, 800k, finish, break, or on request)
 Only on a Session Guard instruction or the user's request (250k is a notice only).
 1. For each open task you own (the instruction lists them): `sg handoff write <id> --technical "<files,
    commands, where it stopped, what to check first>"` (optional `--done`, `--pending`, `--pr <url>`). Branch and

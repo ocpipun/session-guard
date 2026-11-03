@@ -18,7 +18,8 @@ NORMAL_LIMIT, LONG_LIMIT, BREAK_CONTEXT, BREAK_SECONDS = 400 * K, 900 * K, 100 *
 TAIL_BYTES = 4 * 1024 * 1024
 PENDING_MAX = 24 * 3600
 
-# (threshold, key, instruction for Claude, hard stop). Unchanged from v1.4 except that a hand-off is per task.
+# (threshold, key, instruction for Claude, hard stop). From v1.4; a hand-off is per task, and in long mode the
+# hand-off is written at 800k, where work stops (1.4: prepared at 700k while work went on, so it went stale).
 NORMAL_STEPS = [
     (400 * K, "n400", "HARD LIMIT (400k). Do no work. Tell the user the session is closed and to open a new one.", True),
     (350 * K, "n350", "TARGET STOP (350k). Start no new task. Finish the hand-off of every task you own if not done "
@@ -29,14 +30,18 @@ NORMAL_STEPS = [
 ]
 LONG_STEPS = [
     (900 * K, "l900", "HARD LIMIT (900k, long mode). Do no work. Tell the user the session is closed.", True),
-    (800 * K, "l800", "NO WORK (800k, long mode). Do no new work. Only answer simple, specific information questions. "
-                      "Finish the hand-off of every task you own (skill session-guard) before 900k.", False),
-    (700 * K, "l700", "NOTICE + PREPARE (700k, long mode). Tell the user. Make every task you own hand-off ready "
-                      "(skill session-guard). You may keep working and take new tasks.", False),
+    (800 * K, "l800", "HAND-OFF + NO WORK (800k, long mode). Do no new work. Hand off every task you own now (skill "
+                      "session-guard, \"Hand-off\"). From now on only answer simple, specific information questions.", False),
+    (700 * K, "l700", "NOTICE (700k, long mode). Tell the user. Keep the notes of every task you own current (sg task "
+                      "note); write no hand-off yet, it is written at 800k. You may keep working.", False),
     (300 * K, "l300", "NOTICE (300k, long mode). Only tell the user; no hand-off.", False),
     (250 * K, "l250", "NOTICE (250k, long mode). Only tell the user; no hand-off.", False),
 ]
 NOTIFY_ONCE = {"n250", "l250", "l300", "l700"}
+HANDOFF_STEPS = {"n300", "n350", "l800"}
+# Once this step was given, the hand-off is prepared: long mode can no longer be switched on and "finish session"
+# is refused, so no second, stale hand-off of the same session is written.
+HANDED_AT = {False: ("n300", "300k"), True: ("l800", "800k")}
 NOTICE_FORM = (' Tell the user in one line, in their language, in this form: "%dk threshold passed: <what this means '
                'now, in a few words>. *This is a Session Guard notice." Then keep to the instruction; in the middle of '
                'work, give the line and go on working.')
@@ -61,6 +66,12 @@ def step_for(context, long_mode):
         if context is not None and context >= step[0]:
             return step
     return None
+
+
+def handed(rec):
+    """The threshold (e.g. "300k") whose hand-off this session was already told to prepare, or None."""
+    key, k = HANDED_AT[bool(rec.get("long"))]
+    return k if key in rec.get("notified", []) else None
 
 
 def kfmt(n):

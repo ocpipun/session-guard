@@ -10,16 +10,18 @@ işini ezmez.
 
 ## Ne yapar
 
-### Bağlam eşikleri (1.4 ile aynı)
+### Bağlam eşikleri (1.4'ten; uzun mod değişti)
 | Bağlam | Normal mod | Uzun mod |
 |---|---|---|
 | 250k | bildirim | bildirim |
 | 300k | oturumun sahip olduğu her görevin devri; yeni görev yok | bildirim |
 | 350k | hedef durma | — |
 | 400k | kesin durma, oturum kilitlenir | — |
-| 700k | — | bildirim; iş devredilebilir hâle getirilir |
-| 800k | — | iş yok, basit sorular, son devirler |
+| 700k | — | bildirim; görev notları güncel tutulur, henüz devir yok (1.4'ten farklı) |
+| 800k | — | oturumun sahip olduğu her görevin devri; sonra iş yok, basit sorular |
 | 900k | — | kesin durma, oturum kilitlenir |
+
+300k devrinden (normal mod) ya da 800k devrinden (uzun mod) sonra "start long mode" ve "finish session" reddedilir: devir hiçbir zaman iki kez yazılmaz.
 
 ### Molalar (1.4 ile aynı)
 Normal modda 1 saatten uzun ara: bağlam 100k üstündeyse mesaj çalıştırılmaz; Session Guard mesajı kelimesi

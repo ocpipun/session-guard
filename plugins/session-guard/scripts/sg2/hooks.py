@@ -308,11 +308,17 @@ def on_prompt(inp):
         return block(quota_text(quota))
 
     notes, user = [], []
+    refused = None
     if measure.has_command(measure.LONG, prompt) and not rec["long"]:
-        rec["long"] = True
-        notes.append("LONG MODE is on for this session (cannot be switched off). Confirm it to the user in one line.")
+        if measure.handed(rec):
+            refused = msg("long_refused")
+        else:
+            rec["long"] = True
+            notes.append("LONG MODE is on for this session (cannot be switched off). Confirm it to the user in one line.")
     long_mode = rec["long"]
     finish = measure.has_command(measure.FINISH, prompt)
+    if finish and measure.handed(rec):
+        refused, finish = msg("finish_refused", k=measure.handed(rec)), False
     gap = time.time() - reading.last_reply if reading.last_reply else None
     line = "[Session Guard] Context: %s (last reply). Mode: %s. Since last reply: %s.%s" % (
         measure.kfmt(reading.context), "LONG" if long_mode else "normal",
@@ -323,6 +329,9 @@ def on_prompt(inp):
         sessions.lock(rec, "context", "context %s" % measure.kfmt(reading.context))
         sessions.save(rec, reading.ids)
         return block(msg("hard_limit", k=measure.kfmt(reading.context)))
+    if refused:
+        sessions.save(rec, reading.ids)
+        return block(refused)
 
     sid = rec["sg_id"]
     if finish:
@@ -359,7 +368,7 @@ def on_prompt(inp):
         if step:
             if step[1] not in measure.NOTIFY_ONCE or step[1] not in rec["notified"]:
                 notes.append(step[2] + (measure.NOTICE_FORM % (step[0] // core.K) if step[1] not in rec["notified"]
-                                        else "") + (" " + handoff_todo(data, sid) if "hand-off" in step[2].lower()
+                                        else "") + (" " + handoff_todo(data, sid) if step[1] in measure.HANDOFF_STEPS
                                                     and data else ""))
             if step[1] not in rec["notified"]:
                 rec["notified"].append(step[1])

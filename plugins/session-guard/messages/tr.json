@@ -4,8 +4,8 @@
  "n300": "Bağlam 300k: devir hazırlanıyor. Bundan sonra yeni görev alınmaz.",
  "n250": "Bağlam 250k'yı geçti.",
  "l900": "Bağlam 900k: uzun mod kesin sınırı. Oturum kapandı, yeni bir oturum açın.",
- "l800": "Bağlam 800k: çalışma durdu. Yalnız bilgi soruları; devir 900k'dan önce bitirilecek.",
- "l700": "Bağlam 700k: iş devredilebilir hâle getiriliyor.",
+ "l800": "Bağlam 800k: çalışma durdu, devir hazırlanıyor. Bundan sonra yalnız bilgi soruları.",
+ "l700": "Bağlam 700k: çalışma sürüyor; devir 800k'da hazırlanır.",
  "l300": "Bağlam 300k'yı geçti (uzun mod: devir yok).",
  "l250": "Bağlam 250k'yı geçti (uzun mod).",
  "hard_limit": "Bağlam %(k)s, kesin sınır. Oturum kapandı, yeni bir oturum açın.",
@@ -28,5 +28,7 @@
  "closed_home": "Bu proje %(home)s üzerinde yürütülüyor, burada değil. Mesajınız gönderilmedi.",
  "migration_pending": "Bu proje henüz Session Guard 2.0'da değil: bağlam, mola ve kota korunuyor; görevler ve devirler korunmuyor. Geçişi session-guard-executive'den yapılır.",
  "migration_paused": "Session Guard 2.0 kurulumu duraklatıldı (token bütçesi). Mesajınız gönderilmedi. session-guard-executive içinde şunu yazın: continue installation",
- "status_restored": "STATUS.md görev bölümü elle değiştirilmişti; Session Guard onu görev kaydından yeniden oluşturdu."
+ "status_restored": "STATUS.md görev bölümü elle değiştirilmişti; Session Guard onu görev kaydından yeniden oluşturdu.",
+ "long_refused": "Uzun mod açılamaz: devir 300k'da hazırlandı. Mesajınız iletilmedi. Bu oturum 400k'ya kadar yalnız soru cevaplar; işe yeni bir oturumda devam edin (uzun mod orada açılabilir).",
+ "finish_refused": "\"finish session\" kullanılamaz: devir %(k)s'da hazırlandı. Mesajınız iletilmedi. Sorunuzu komutsuz yazın ya da yeni bir oturum açın."
 }

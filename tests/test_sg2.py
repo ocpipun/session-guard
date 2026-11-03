@@ -294,6 +294,49 @@ class Guard(Base):
         out = self.hook("PostToolUse", "l", self.transcript("l", 905000), cwd=root, tool_name="Bash")
         self.assertFalse(out.get("continue", True))
 
+    def test_long_mode_hands_off_at_800k_not_700k(self):
+        root = self.project()
+        self.start("h", root)
+        self.hook("UserPromptSubmit", "h", self.transcript("h", 1000), cwd=root, prompt="start long mode")
+        out = self.hook("UserPromptSubmit", "h", self.transcript("h", 710000), cwd=root, prompt="go")
+        self.assertIn("NOTICE (700k", self.ctx(out))
+        self.assertNotIn("Hand off", self.ctx(out))
+        out = self.hook("PostToolUse", "h", self.transcript("h", 810000), cwd=root, tool_name="Bash")
+        self.assertIn("Hand off every task you own now", self.ctx(out))
+
+    def test_long_mode_refused_after_300k_handoff(self):
+        root = self.project()
+        self.start("r", root)
+        out = self.hook("PostToolUse", "r", self.transcript("r", 310000), cwd=root, tool_name="Bash")
+        self.assertIn("HAND-OFF (300k)", self.ctx(out))
+        out = self.hook("UserPromptSubmit", "r", self.transcript("r", 312000), cwd=root, prompt="start long mode")
+        self.assertEqual(out.get("decision"), "block")
+        self.assertIn("Long mode cannot be switched on", out.get("reason"))
+        out = self.hook("UserPromptSubmit", "r", self.transcript("r", 312000), cwd=root, prompt="what is X?")
+        self.assertNotIn("decision", out)
+        self.assertIn("Mode: normal", self.ctx(out))
+
+    def test_finish_refused_after_handoff(self):
+        root = self.project()
+        self.start("n", root)
+        self.hook("UserPromptSubmit", "n", self.transcript("n", 310000), cwd=root, prompt="go")
+        out = self.hook("UserPromptSubmit", "n", self.transcript("n", 312000), cwd=root, prompt="finish session")
+        self.assertEqual(out.get("decision"), "block")
+        self.assertIn("hand-off was already prepared at 300k", out.get("reason"))
+        self.assertNotIn("decision", self.hook("UserPromptSubmit", "n", self.transcript("n", 312000), cwd=root,
+                                               prompt="what is X?"))
+        out = self.hook("UserPromptSubmit", "n", self.transcript("n", 405000), cwd=root, prompt="finish session")
+        self.assertIn("hard limit", out.get("reason"))
+        self.start("g", root)
+        self.hook("UserPromptSubmit", "g", self.transcript("g", 1000), cwd=root, prompt="start long mode")
+        out = self.hook("UserPromptSubmit", "g", self.transcript("g", 710000), cwd=root, prompt="finish session")
+        self.assertIn("FINISH SESSION", self.ctx(out))
+        self.start("k", root)
+        self.hook("UserPromptSubmit", "k", self.transcript("k", 1000), cwd=root, prompt="start long mode")
+        self.hook("UserPromptSubmit", "k", self.transcript("k", 810000), cwd=root, prompt="go")
+        out = self.hook("UserPromptSubmit", "k", self.transcript("k", 812000), cwd=root, prompt="finish session")
+        self.assertIn("hand-off was already prepared at 800k", out.get("reason"))
+
     def test_break_rule_records_command_word_for_word_and_locks(self):
         root = self.migrated()
         _, sid = self.start("b", root)

@@ -50,7 +50,7 @@ session is locked when its last open task is claimed. After "finish session" the
 
 | Component | Verdict | Note |
 |---|---|---|
-| Context measurement, thresholds, long mode | DIRECTLY REUSED | numbers and texts kept; hand-off made per task |
+| Context measurement, thresholds, long mode | REUSED, CHANGED | numbers kept; hand-off per task; long mode hands off at 800k (1.4: 700k while work went on); after the 300k/800k hand-off "start long mode" and "finish session" are refused (user decision 2026-11-03: no second, stale hand-off of one session) |
 | Break rule | REUSED, CHANGED | the hook itself stores the user's command word for word in each owned task |
 | Quota (Session Follow) | DIRECTLY REUSED | same thresholds; state moved to `session_guard_v2/follow` |
 | Session lock types | REUSED, EXTENDED | + handed, legacy, home |
