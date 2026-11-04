@@ -225,7 +225,7 @@ def project_root(inp):
     path = start
     while usable_root(path):
         if exists_ci(path, "CLAUDE.md") or os.path.exists(os.path.join(path, ".git")) or \
-                os.path.isfile(os.path.join(project_dir(path), "project.json")):
+                os.path.isfile(os.path.join(project_dir(path), "store.json")):
             return path
         path = os.path.dirname(path)
     return usable_root(start)

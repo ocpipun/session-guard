@@ -50,9 +50,17 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
   under "## Notes" (STATUS.md stays at 50 lines or less; move old notes to STATUS_ARCHIVE.md).
 - SESSION START: if several tasks can be taken over (hand-offs waiting, orphaned tasks), do not pick one: ask the
   user which. Read a hand-off with `sg task show <id>` before claiming it.
-- HAND-OFF: per task you own, `sg handoff write <id> --technical "..."` (skill session-guard), then
-  `sg handoff publish` (commits Session Guard's files and verifies the push; a hand-off is not done before that).
+- HAND-OFF: first bring each task you own to a hand-off-ready point (finish the small step in progress, leave
+  nothing half-written), then per task `sg handoff write <id> --technical "..."`, then `sg handoff publish` (skill
+  session-guard). The next session must find the work and know where it is:
+  - Cloud (always): `handoff write` commits the task's unfinished work and `handoff publish` pushes it to the
+    task's own side branch sg/<task-id> (verified); a hand-off is not done before that. Several tasks: name each
+    task's files with --paths.
+  - Computer: the work stays in the folder (the record lists the uncommitted files); no side branch, no push.
+    Use a side branch (--side-branch) only when the user asks for it, or you propose it and the user approves.
   A task already handed off and unchanged, or finished, is not handed off again.
+- TAKING OVER: a hand-off on a side branch this checkout does not have is listed at session start ("HAND-OFF
+  BRANCHES"); `sg handoff adopt <branch>` merges its work and record here, then claim the task.
 - VERY IMPORTANT: docs/STATUS_ARCHIVE.md is NOT read at session start, also not after a hand-off. Read it only
   when needed, and then only the matching part, found by search (Grep); never the whole file.
 - Quota (computer only): when Session Guard asks for a quota reading, call the usage tool it names silently, in
@@ -83,7 +91,7 @@ GENERAL_RULES = """# Session Guard 2.0 general rules (SESSION-GUARD: 2.0)
 
 ## Session measurement
 - On "finish session" read the weekly and 5-hour quota percentages if the app has a usage tool, run the
-  `--report` command Session Guard gives and add one row to the "Session measurements" table of
+  `report` command Session Guard gives and add one row to the "Session measurements" table of
   STATUS_ARCHIVE.md. A value you cannot read is "n/a"; never invent a number. Never present a token drop as a
   quota saving."""
 

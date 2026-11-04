@@ -15,7 +15,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from sg2 import cli, hooks, place  # noqa: E402
+from sg2 import cli, core, hooks, place  # noqa: E402
 
 COMMANDS = ("task", "idea", "handoff", "migrate", "install", "manifest", "report", "-h", "--help")
 
@@ -33,8 +33,10 @@ def main():
         except Exception:  # a status line never shows an error
             return 0
     try:
-        if hooks.PROJECT_MODE and place.plugin_installed(__file__):
+        if hooks.PROJECT_MODE and not core.in_cloud() and place.plugin_installed(__file__):
             return 0  # the plugin guards this computer; the repository copy stays quiet (never twice)
+        if not hooks.PROJECT_MODE and core.in_cloud():
+            return 0  # in the cloud the repository copy guards; a plugin carried into a cloud session stays quiet
         inp = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace") or "{}")
         return hooks.dispatch(inp, args)
     except Exception:  # the guard must never break the user's work

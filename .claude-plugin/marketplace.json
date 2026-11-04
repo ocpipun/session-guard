@@ -1,6 +1,6 @@
 {
   "name": "session-guard",
-  "description": "Session Guard: context and break measurement, hand-off thresholds and session locking for Claude Code.",
+  "description": "Session Guard 2.0: context, break and quota guard, session locks, task ids and ownership, hand-offs that keep unfinished work, for Claude Code.",
   "owner": {
     "name": "ocpipun"
   },
@@ -8,7 +8,8 @@
     {
       "name": "session-guard",
       "source": "./plugins/session-guard",
-      "description": "Measures context size and breaks, enforces hand-off thresholds, locks finished sessions, creates project files and removes conflicting rules with your approval."
+      "description": "Session Guard 2.0: measures context, breaks and quota, locks finished sessions, gives every project, session and task an id, guards task ownership and hand-offs (cloud work kept on a side branch per task), and migrates projects from 1.x.",
+      "version": "2.0.0"
     }
   ]
 }

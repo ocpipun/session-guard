@@ -80,9 +80,11 @@ def block_lines(data, compact=0):
     for t in waiting:
         h = t["handoff"]
         push = h.get("push") or {}
-        lines.append("- %s from %s, %s, %s%s: claim with `sg task claim %s`" % (
+        w = h.get("work") or {}
+        lines.append("- %s from %s, %s, %s%s%s: claim with `sg task claim %s`" % (
             t["id"], h["source_session"], h["created"][:10], h["state"],
-            " (%s)" % push.get("commit", "")[:8] if push.get("commit") else "", t["id"]))
+            " (%s)" % push.get("commit", "")[:8] if push.get("commit") else "",
+            " · work on %s" % w["branch"] if w.get("mode") == "side-branch" else "", t["id"]))
     return lines
 
 
@@ -185,6 +187,22 @@ def append_archive(root, title, lines):
     core.append_text(path, "\n## %s %s %s\n" % (core.today(), SIGN, title) + "".join("- %s\n" % l for l in lines))
 
 
+def work_line(w):
+    """Where a task's unfinished work is (written by `sg handoff write`)."""
+    if not w:
+        return "Work: not recorded"
+    if w["mode"] == "side-branch":
+        return "Work: side branch %s (commit %s%s; files: %s). Take it over with `sg handoff adopt %s` when this " \
+               "checkout does not have it" % (w["branch"], (w.get("commit") or "?")[:12],
+                                               ", pushed" if w.get("pushed") else ", NOT pushed yet",
+                                               ", ".join(w.get("files") or []) or "none", w["branch"])
+    if w.get("git") is False:
+        return "Work: in the folder %s (no git)" % w.get("path")
+    return "Work: in the folder %s, branch %s at %s; uncommitted: %s" % (
+        w.get("path"), w.get("branch") or "-", (w.get("commit") or "?")[:12], ", ".join(w.get("uncommitted") or [])
+        or "none")
+
+
 def handoff_lines(h):
     return ["PROJECT-ID: %s · TASK-ID: %s" % (h["project_id"], h["task_id"]),
             "Source session: %s (parent: %s; children: %s)" % (h["source_session"], h.get("session_parent") or "none",
@@ -192,7 +210,7 @@ def handoff_lines(h):
             "Last developer: %s · status: %s · owner then: %s" % (h["last_developer"], h["status"], h["owner"]),
             "Done: " + ("; ".join(h["done"]) or "-"), "Pending: " + ("; ".join(h["pending"]) or "-"),
             "Branch: %s · PR: %s" % (h.get("branch") or "-", h.get("pr") or "-"),
-            "Technical: " + h["technical"],
+            "Technical: " + h["technical"], work_line(h.get("work")),
             "User command (word for word): " + (h.get("user_command") or "none"),
             "Written %s · %s%s" % (h["created"], h["state"], " · push %s" % (h.get("push") or {}).get("commit", "")
                                    if h.get("push") else ""),

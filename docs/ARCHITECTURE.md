@@ -1,7 +1,7 @@
 <!-- SESSION-GUARD: 2.0 | component: doc-architecture | version: 2.0.0 -->
 # Session Guard 2.0 — architecture, migration plan, risks
 
-Status: development branch `v2.0-dev`. Not installed anywhere, nothing pushed, no real project migrated.
+Status: 2.0.0 on `main` (2026-11-04). Real use starts with the user's own install; no real project migrated yet.
 
 ## 1. Layers
 
@@ -40,11 +40,28 @@ start per project only after its migration is verified.
 
 ## 4. Hand-off
 Fields: PROJECT-ID, TASK-ID, source SESSION-ID, its parent/children, last developer, status, done, pending,
-owner, branch, PR (gh when available), technical notes (required), the user's command word for word (break).
-States: prepared → published (push verified with `git ls-remote`) or local (no git / no remote) → claimed
-(archived in STATUS_ARCHIVE.md, append only). Not repeated when unchanged or when the task is finished. The source
-session is locked when its last open task is claimed. After "finish session" the Stop hook keeps Claude working
-(twice at most) until every owned task has a published hand-off.
+owner, branch, PR (gh when available), technical notes (required), the user's command word for word (break), and
+the work record (where the unfinished work is).
+Work first (user decision 2026-11-04): before the note, Claude brings the work to a hand-off-ready point; then
+`sg handoff write` records the work:
+- computer (default): mode "folder": path, branch, commit, the uncommitted files. No commit, no push: the next
+  session opens the same folder (side branches would cost tokens for nothing there).
+- cloud (always) or computer with `--side-branch` (only when the user asks or approves): mode "side-branch": the
+  task's changed files are committed (`--paths` when the session owns several tasks) and `sg handoff publish`
+  pushes HEAD to `sg/<task-id>` (verified with `git ls-remote`). In the cloud, publish refuses while any changed
+  file is unsaved, and the Stop hook keeps Claude working (twice at most) after finish, a break or the 300k/800k
+  hand-off while files are unsaved or hand-offs unpublished.
+States: prepared → published (side branch, push verified) or local (kept in the folder) → claimed (archived in
+STATUS_ARCHIVE.md, append only). Not repeated when unchanged or when the task is finished. The source session is
+locked when its last open task is claimed.
+Taking over in the cloud: a new session starts from the default branch, which has neither the work nor the
+hand-off. Session start lists the remote `sg/*` branches the checkout does not contain ("HAND-OFF BRANCHES");
+`sg handoff adopt <branch>` merges one. Conflicts in Session Guard's files are resolved there: store.json by
+`store.merge` (tasks: the copy changed last; sessions: the strongest state, a lock is never undone; counters never
+go back; two different tasks that got one id on two branches: the other branch's task and its subtasks get the
+next free ids, references rewritten, a note added), archive and completed list by the union of lines, STATUS and
+backlog rebuilt. A conflict in any other file aborts the merge and changes nothing. A renumbered task keeps its
+side branch name.
 
 ## 5. v1.4 review
 
@@ -63,7 +80,8 @@ session is locked when its last open task is claimed. After "finish session" the
 | Project files creation at session start | REMOVED | 2.0 never writes into a project before its migration |
 | One home per project (computer/cloud) | REUSED, CHANGED | `home` field in the store; cloud-blocking hook `session-guard2-home` (replaces the 1.x one in place) |
 | Setup gate, conflict scan (`--scan`) | REWRITTEN | install + migration survey (content-based) |
-| `--push` / `--claim` | REWRITTEN | `gitops.commit_paths` + `push_verified` |
+| `--push` / `--claim` | REWRITTEN | `gitops.commit_paths` + `push_verified`; work kept per task (folder / side branch), `handoff adopt` |
+| Hand-off note | REUSED, CHANGED | per task; work made hand-off ready first; cloud work on `sg/<task-id>` (user decision 2026-11-04) |
 | `cloud_setup.py` (repository copy) | REWRITTEN | `sg install cloud` (`sg2/place.py`): copy in `.claude/session-guard2/bin/`, 1.x copy hooks replaced, quiet beside the plugin |
 | Terminal status line | REUSED, CHANGED | mark `session-guard2-statusline`; a 1.x line is re-pointed, another tool's line untouched |
 | v1.2 design doc, v1.4 tests | REMOVED on the branch | still on `main` |
@@ -78,6 +96,9 @@ session is locked when its last open task is claimed. After "finish session" the
   still named `session_guard.py` (v1.4 `plugin_installed()`); migration verify refuses while it is present.
 - Hooks in user settings that run a `session_guard.py` (hand-made copies) are listed for approval.
 - Status line: a 1.x line is re-pointed to 2.0 at install; another tool's line is left alone.
+- Cloud: the repository copy guards; a plugin that reaches a cloud session stays quiet (no "setup pending" noise
+  in other repositories). On a computer the copy stays quiet when the plugin is installed. A 1.x global block
+  written back by a 1.x session after the update is removed at the next 2.0 session start.
 - Read-only discovery on the development computer (2026-11-03): 12 projects (7 git with the 1.x computer guard,
   5 without git), 1.x plugin, state folder, global block and status line present; nothing was written.
 
@@ -97,6 +118,11 @@ Risks:
    locked.
 5. Git merge conflicts in `store.json` between branches are not resolved automatically.
 6. The plan is written by Claude from file contents; contradictions are listed, not resolved; the user approves.
+7. Side branches are merged into the default branch by the user (or a pull request); they pile up until then. A
+   closed task's branch stays listed at session start until it is merged.
+8. Parallel cloud sessions keep separate copies of the store; they meet only when a branch is merged
+   (`handoff adopt` or the user's merge). A git merge done by hand outside `handoff adopt` can still conflict in
+   store.json.
 
 ## 8. Not verifiable / unverified
 - `CLAUDE_CODE_ENTRYPOINT` (desktop detection) is not documented.
@@ -109,6 +135,11 @@ Risks:
 - The desktop app's own sessions sidebar archive is not a lock (user requirement; nothing can be checked here).
 - Remote Control: hooks run on the computer (documented); `CLAUDE_CODE_BRIDGE_SESSION_ID` only during an active
   connection.
+- Cloud pushes: the GitHub proxy "doesn't limit which branches a push can update" (documented); a protected branch
+  can still refuse. Pushing `sg/*` from a real cloud session: not tested yet.
+- Whether a cloud session receives the user's plugins (a variable `CLAUDE_CODE_SYNC_PLUGINS` exists there, seen by
+  name only): not documented; 2.0 stays quiet in that case either way.
+- Quota in the cloud: measured 2026-11-03, not readable (no status line run, no usage tool).
 
 ## 9. Install / uninstall (to be done only with the user's approval)
 Install: in `session-guard-executive`, `sg manifest verify`, `sg install conflicts`, one approval, `sg install

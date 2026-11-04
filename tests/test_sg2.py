@@ -426,13 +426,13 @@ class Guard(Base):
         self.assertIn("PASSIVE", self.ctx(out))
         self.assertEqual(self.hook("UserPromptSubmit", "p", self.transcript("p", 500000), cwd=root, prompt="x"), {})
 
-    def test_cloud_session_of_computer_project_blocked(self):
+    def test_plugin_is_quiet_in_the_cloud(self):
+        # In the cloud the repository copy guards (and a computer project's own guard hook blocks the session); a
+        # plugin carried into a cloud session says nothing, so other repositories get no "setup pending" noise.
         root = self.migrated()
         env = dict(self.env, CLAUDE_CODE_REMOTE="true")
-        self.hook("SessionStart", "cl", cwd=root, env=env)
-        out = self.hook("UserPromptSubmit", "cl", cwd=root, prompt="hi", env=env)
-        self.assertEqual(out.get("decision"), "block")
-        self.assertIn("computer", out["reason"])
+        self.assertEqual(self.hook("SessionStart", "cl", cwd=root, env=env), {})
+        self.assertEqual(self.hook("UserPromptSubmit", "cl", cwd=root, prompt="hi", env=env), {})
 
     def test_session_id_passed_to_bash(self):
         root = self.project()
@@ -457,6 +457,141 @@ class Guard(Base):
         self.assertEqual(self.hook("Stop", "f", cwd=root).get("decision"), "block")
         self.assertEqual(self.hook("Stop", "f", cwd=root).get("decision"), "block")
         self.assertEqual(self.hook("Stop", "f", cwd=root), {})
+
+
+class Work(Base):
+    """Hand-off ready work: the folder on the computer, a side branch per task in the cloud."""
+
+    def repo(self, name, home):
+        bare = os.path.join(self.home, name + ".git")
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True)
+        root = self.project(name, git=True, files={"app.py": "print(1)\n"})
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "app")
+        self.git(root, "remote", "add", "origin", bare)
+        self.sg("migrate", "discover", "--add", root, ok=True)
+        self.sg("migrate", "survey", root, ok=True)
+        plan = os.path.join(self.home, name + "-plan.json")
+        json.dump({"name": name, "home": home, "tasks": []}, open(plan, "w"))
+        self.sg("migrate", "apply", root, "--plan", plan, "--session", S3, ok=True)
+        self.sg("migrate", "verify", root, ok=True)
+        if home == "cloud":
+            self.sg("install", "cloud", root, ok=True)
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "session guard")
+        self.git(root, "push", "-q", "origin", "main")
+        return root, bare
+
+    def cloud(self, root):
+        return dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=root)
+
+    def c(self, root, *args, sid=S1, ok=None):
+        return self.sg(*args, "--session", sid, "--root", root, env=self.cloud(root), ok=ok)
+
+    def chook(self, root, event, cid, **extra):
+        data = dict({"hook_event_name": event, "session_id": cid, "transcript_path": "none.jsonl", "cwd": root,
+                     "source": "startup", "prompt": ""}, **extra)
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--project"], input=json.dumps(data).encode(),
+                           capture_output=True, env=self.cloud(root))
+        out = r.stdout.decode()
+        return json.loads(out) if out else {}
+
+    def write(self, root, rel, text):
+        with open(os.path.join(root, rel), "w") as fh:
+            fh.write(text)
+
+    def test_computer_keeps_work_in_the_folder(self):
+        root, bare = self.repo("pc", "computer")
+        self.sg("task", "new", "--title", "A", "--approval", "ok", "--session", S1, "--root", root, ok=True)
+        self.write(root, "app.py", "print(2)\n")
+        out = self.sg("handoff", "write", "TASK-002", "--technical", "x", "--session", S1, "--root", root, ok=True)
+        self.assertIn("work: this folder (1 uncommitted", out)
+        self.assertIn("uncommitted: app.py", self.sg("task", "show", "TASK-002", "--root", root))
+        self.assertIn("kept in this folder", self.sg("handoff", "publish", "--session", S1, "--root", root, ok=True))
+        self.assertEqual(self.git(bare, "branch", "--list", "sg/*"), "")       # no side branch, no push
+        self.assertIn("app.py", self.git(root, "status", "--porcelain"))        # the work is not committed
+
+    def test_computer_side_branch_only_when_asked(self):
+        root, bare = self.repo("pc2", "computer")
+        self.sg("task", "new", "--title", "A", "--approval", "ok", "--session", S1, "--root", root, ok=True)
+        self.write(root, "app.py", "print(2)\n")
+        self.sg("handoff", "write", "TASK-002", "--technical", "x", "--side-branch", "--session", S1, "--root", root,
+                ok=True)
+        self.assertIn("VERIFIED", self.sg("handoff", "publish", "--session", S1, "--root", root, ok=True))
+        self.assertEqual(self.git(bare, "show", "sg/task-002:app.py"), "print(2)")
+
+    def test_cloud_side_branch_round_trip(self):
+        root, bare = self.repo("cp", "cloud")
+        self.c(root, "task", "new", "--title", "Feature", "--approval", "ok", ok=True)
+        self.write(root, "app.py", "print(2)\n")
+        self.write(root, "feature.py", "x = 1\n")
+        out = self.c(root, "handoff", "write", "TASK-002", "--technical", "run app.py", "--pending", "tests", ok=True)
+        self.assertIn("side branch sg/task-002", out)
+        out = self.c(root, "handoff", "publish", ok=True)
+        self.assertIn("TASK-002 → sg/task-002: push VERIFIED", out)
+        self.assertEqual(self.git(bare, "show", "sg/task-002:feature.py"), "x = 1")
+        self.assertEqual(self.git(root, "status", "--porcelain", "--", "app.py", "feature.py"), "")
+        self.assertEqual(self.git(bare, "show", "main:app.py"), "print(1)")     # main untouched
+        # a new cloud session starts from main and has neither the work nor the hand-off
+        root2 = os.path.join(self.home, "work", "cp2")
+        subprocess.run(["git", "clone", "-q", bare, root2], check=True)
+        self.c(root2, "task", "new", "--title", "Other", "--approval", "ok", sid=S2, ok=True)  # also TASK-002 here
+        out = self.chook(root2, "SessionStart", "c2")
+        self.assertIn("HAND-OFF BRANCHES not in this checkout: sg/task-002", self.ctx(out))
+        out = self.c(root2, "handoff", "adopt", "sg/task-002", sid=S2, ok=True)
+        self.assertIn("Hand-offs waiting: TASK-003", out)                       # renumbered: ids never collide
+        data = self.store(root2)
+        self.assertEqual(data["tasks"]["TASK-002"]["title"], "Other")
+        self.assertEqual(data["tasks"]["TASK-003"]["title"], "Feature")
+        self.assertEqual(data["tasks"]["TASK-003"]["handoff"]["task_id"], "TASK-003")
+        self.assertEqual(self.text(root2, "feature.py"), "x = 1\n")
+        self.assertIn("Work: side branch sg/task-002", self.c(root2, "task", "show", "TASK-003", sid=S2))
+        self.c(root2, "task", "claim", "TASK-003", sid=S2, ok=True)
+        self.assertNotIn("HAND-OFF BRANCHES", self.ctx(self.chook(root2, "SessionStart", "c3")))
+
+    def test_cloud_several_tasks_need_paths_and_nothing_unsaved_is_published(self):
+        root, _ = self.repo("cs", "cloud")
+        for n in "AB":
+            self.c(root, "task", "new", "--title", n, "--approval", "ok", ok=True)
+        self.write(root, "a.py", "a\n")
+        self.write(root, "b.py", "b\n")
+        self.assertIn("--paths", self.c(root, "handoff", "write", "TASK-002", "--technical", "x", ok=False))
+        self.c(root, "handoff", "write", "TASK-002", "--technical", "x", "--paths", "a.py", ok=True)
+        self.assertIn("b.py", self.c(root, "handoff", "publish", ok=False))     # b.py would be lost
+        self.c(root, "handoff", "write", "TASK-003", "--technical", "y", "--paths", "b.py", ok=True)
+        out = self.c(root, "handoff", "publish", ok=True)
+        self.assertIn("sg/task-002: push VERIFIED", out)
+        self.assertIn("sg/task-003: push VERIFIED", out)
+
+    def test_cloud_stop_hook_keeps_unsaved_work(self):
+        root, _ = self.repo("cst", "cloud")
+        self.chook(root, "SessionStart", "f")
+        sid = json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions", "f.json")))["sg_id"]
+        self.c(root, "task", "new", "--title", "A", "--approval", "ok", sid=sid, ok=True)
+        self.write(root, "a.py", "a\n")
+        out = self.chook(root, "UserPromptSubmit", "f", prompt="finish session")
+        self.assertIn("FINISH SESSION", self.ctx(out))
+        self.assertIn("side branch", self.ctx(out))
+        out = self.chook(root, "Stop", "f")
+        self.assertEqual(out.get("decision"), "block")
+        self.assertIn("save the unfinished work (a.py)", out["reason"])
+
+    def test_store_merge_keeps_both_tasks_and_strongest_session_state(self):
+        sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
+        from sg2 import store as st
+        base = st.blank("p", "cloud")
+        ours, theirs = json.loads(json.dumps(base)), json.loads(json.dumps(base))
+        st.new_task(ours, S1, "mine", approval="ok")
+        st.new_task(theirs, S2, "theirs", approval="ok")
+        st.new_task(theirs, S2, "theirs sub", parent="TASK-001")
+        st.register_session(ours, S1, "c1", "cloud")
+        st.register_session(theirs, S1, "c1", "cloud")
+        st.lock_session(theirs, S1, "handed")
+        m = st.merge(ours, theirs)
+        self.assertEqual({t["title"] for t in m["tasks"].values()}, {"mine", "theirs", "theirs sub"})
+        self.assertEqual(m["tasks"]["TASK-002-1"]["parent"], "TASK-002")
+        self.assertEqual(m["next_task"], 3)
+        self.assertEqual(m["sessions"][S1]["state"], "locked")
 
 
 class Migration(Base):
@@ -596,7 +731,9 @@ class Places(Base):
         fake = os.path.join(self.home, ".claude", "plugins", "cache", "sg", "scripts")
         os.makedirs(fake)
         open(os.path.join(fake, "session_guard.py"), "w").close()
-        self.assertEqual(run("SessionStart", "c2"), "")       # the plugin guards this machine: the copy is quiet
+        self.assertIn("Session Guard 2.0", run("SessionStart", "c2"))  # cloud: the copy guards, plugin or not
+        env.pop("CLAUDE_CODE_REMOTE")
+        self.assertEqual(run("SessionStart", "c3"), "")       # computer: the plugin guards, the copy is quiet
 
     def test_computer_project_gets_no_cloud_copy(self):
         root = self.project("cp", git=True, files={".claude/settings.json": json.dumps({"hooks": {"UserPromptSubmit": [

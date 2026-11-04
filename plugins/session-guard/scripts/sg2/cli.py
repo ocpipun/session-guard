@@ -42,6 +42,8 @@ def show_task(data, t):
     lines += ["note: " + n for n in t["notes"][-5:]]
     if t["handoff"]:
         lines += ["HAND-OFF:"] + ["  " + l for l in render.handoff_lines(t["handoff"])[:-1]]
+    elif t.get("work"):
+        lines.append(render.work_line(t["work"]))
     if t.get("pending_user_command"):
         lines.append("user command waiting (word for word): " + t["pending_user_command"])
     return "\n".join(lines)
@@ -104,35 +106,174 @@ def cmd_idea(a):
     return 0
 
 
+def save_work(root, data, sid, a):
+    """Step one of a hand-off: the task's unfinished work goes where the next session finds it.
+    Computer (default): the work stays in this folder; the record lists the uncommitted files. Cloud (always), or on
+    the computer with --side-branch (only when the user asked or approved): the task's files are committed here and
+    `handoff publish` pushes them to the task's own branch sg/<task-id>, so nothing is lost with the session."""
+    t = store.task(data, a.id)
+    store._check_owner(data, sid, t)
+    if t["status"] in store.CLOSED:
+        raise store.Refused("%s is %s: a finished task needs no hand-off" % (a.id, t["status"]))
+    if not gitops.is_repo(root):
+        return {"mode": "folder", "path": root, "git": False, "saved": core.iso()}
+    changed = gitops.changed_files(root)
+    side = core.in_cloud() or a.side_branch or (t.get("work") or {}).get("mode") == "side-branch"
+    if not side:
+        more = ["(+%d more)" % (len(changed) - 30)] if len(changed) > 30 else []
+        return {"mode": "folder", "path": root, "branch": gitops.branch(root), "commit": gitops.head(root),
+                "uncommitted": changed[:30] + more, "saved": core.iso()}
+    mine = [x["id"] for x in store.owned_open(data, sid)]
+    if a.paths:
+        files = gitops.select(changed, a.paths)
+    elif a.no_files or not changed:
+        files = []
+    elif len(mine) <= 1:
+        files = changed
+    else:
+        raise store.Refused("you own several open tasks (%s) and %d files changed (%s): name this task's files with "
+                            "--paths <file or folder> ... (or --no-files when it changed none)" % (
+                                ", ".join(mine), len(changed), ", ".join(changed[:8])))
+    c = gitops.commit_work(root, files, "Work in progress: %s %s (hand-off)\n\nSESSION-GUARD: 2.0 · %s · %s" % (
+        a.id, t["title"], sid, data["project_id"]))
+    if c.get("error"):
+        raise store.Refused("commit of the work failed: " + c["error"])
+    old = t.get("work") or {}
+    branch = old["branch"] if old.get("mode") == "side-branch" else gitops.side_branch(a.id)  # kept after renumbering
+    return {"mode": "side-branch", "branch": branch, "from_branch": gitops.branch(root),
+            "commit": c["commit"], "files": files[:30], "saved": core.iso(), "pushed": None}
+
+
+AUTO_MERGE = (".claude/session-guard2/store.json", ".claude/session-guard2/.gitignore", "docs/STATUS.md",
+              "docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md", "docs/COMPLETED_TASKS.md")
+
+
+def union_lines(ours, theirs):
+    seen = set(ours.splitlines())
+    extra = [l for l in theirs.splitlines() if l not in seen]
+    return ours.rstrip("\n") + "\n" + ("\n".join(extra) + "\n" if extra else "")
+
+
+def adopt(root, sid, branch):
+    """Merges a side branch (a task's work and its hand-off) into this checkout. Conflicts in Session Guard's
+    files are resolved here (store: union, see store.merge; archive and completed list: union of lines; STATUS and
+    backlog: rebuilt); a conflict in any other file stops the merge and leaves everything as it was."""
+    if not (branch or "").startswith(gitops.SIDE_PREFIX):
+        raise store.Refused("give a side branch: sg/task-...")
+    if not gitops.is_repo(root) or not gitops.remote(root):
+        raise store.Refused("no git remote here")
+    gitops.commit_paths(root, "Session Guard 2.0: state before taking over %s (%s)\n\nSESSION-GUARD: 2.0" % (
+        branch, sid))
+    rc, _, err = gitops.git(root, "fetch", gitops.remote(root), "refs/heads/" + branch)
+    if rc:
+        raise store.Refused("fetch of %s failed: %s" % (branch, (err.splitlines() or ["?"])[-1]))
+    rc, _, err = gitops.git(root, "merge", "--no-edit", "-m", "Session Guard 2.0: take over %s (work and hand-off)"
+                            "\n\nSESSION-GUARD: 2.0 · %s" % (branch, sid), "FETCH_HEAD")
+    if rc:
+        bad = gitops.conflicted(root)
+        if not bad or any(f not in AUTO_MERGE for f in bad):
+            gitops.git(root, "merge", "--abort")
+            raise store.Refused("merging %s stopped (%s); nothing was changed. Merge it by hand (`git fetch origin %s "
+                                "&& git merge FETCH_HEAD`) or ask the user" % (
+                                    branch, ("conflicts: " + ", ".join(bad)) if bad else (err.splitlines() or ["?"])[-1],
+                                    branch))
+        for f in bad:
+            ours, theirs = gitops.git(root, "show", ":2:" + f, strip=False)[1], gitops.git(root, "show", ":3:" + f,
+                                                                                         strip=False)[1]
+            if f.endswith("store.json"):
+                try:
+                    merged = store.merge(json.loads(ours), json.loads(theirs))
+                except (ValueError, store.Refused) as e:
+                    gitops.git(root, "merge", "--abort")
+                    raise store.Refused("the task stores of %s and this checkout cannot be merged (%s); nothing "
+                                        "was changed. Ask the user" % (branch, e))
+                text = json.dumps(merged, ensure_ascii=False, indent=1) + "\n"
+            elif f.endswith(("STATUS_ARCHIVE.md", "COMPLETED_TASKS.md", ".gitignore")):
+                text = union_lines(ours, theirs)
+            else:
+                text = ours  # STATUS.md and TASK_BACKLOG.md are rebuilt from the merged store below
+            core.write_text(os.path.join(root, f), text)
+            gitops.git(root, "add", "--", f)
+        rc, _, err = gitops.git(root, "commit", "--no-edit")
+        if rc:
+            gitops.git(root, "merge", "--abort")
+            raise store.Refused("merge commit failed: " + (err.splitlines() or ["?"])[-1])
+    data = store.load(root)
+    if data:
+        with core.FileLock(store.lock_path(root)):
+            render.render_status(root, data)
+            render.render_backlog(root, data)
+        gitops.commit_paths(root, "Session Guard 2.0: STATUS after taking over %s\n\nSESSION-GUARD: 2.0" % branch)
+    return data
+
+
 def cmd_handoff(a):
     root = root_of(a)
     sid = session_of(a)
+    if a.action == "adopt":
+        data = adopt(root, sid, a.id)
+        waiting = [t["id"] for t in store.waiting_handoffs(data, sid)] if data else []
+        out("merged %s: its work and hand-off are in this checkout. Hand-offs waiting: %s. Read one with `sg task "
+            "show <id>`, then `sg task claim <id>`." % (a.id, ", ".join(waiting) or "none"))
+        return 0
     if a.action == "write":
+        if not a.id or not core.TASK_ID.match(a.id):
+            raise store.Refused("give a TASK-ID")
+        data = store.load(root)
+        if not data:
+            raise store.Refused("not a 2.0 project: " + root)
+        work = save_work(root, data, sid, a)
         br = gitops.branch(root) if gitops.is_repo(root) else None
         pr = a.pr or (gitops.pr_url(root) if br else None)
-        r = store.mutate(root, lambda d: store.handoff(d, sid, a.id, a.technical, done=a.done or [],
-                                                        pending=a.pending or [], developer=a.developer, branch=br,
-                                                        pr=pr))
-        out("%s hand-off %s" % (a.id, r))
+
+        def change(d):
+            store.set_work(d, sid, a.id, work)
+            return store.handoff(d, sid, a.id, a.technical, done=a.done or [], pending=a.pending or [],
+                                 developer=a.developer, branch=br, pr=pr)
+        r = store.mutate(root, change)
+        where = ("side branch %s (pushed by `handoff publish`; %d files committed)" % (work["branch"], len(work["files"]))
+                 if work["mode"] == "side-branch" else "this folder (%d uncommitted files listed)" %
+                 len(work.get("uncommitted") or []))
+        out("%s hand-off %s · work: %s" % (a.id, r, where))
         return 0
-    # publish: commit Session Guard's own files and verify the push
-    if gitops.is_repo(root):
-        data = store.load(root)
+    # publish: side-branch work is committed with Session Guard's files and pushed to each task's branch (verified);
+    # work kept in the folder (computer) needs no push: the next session opens the same folder.
+    data = store.load(root)
+    if not data:
+        raise store.Refused("not a 2.0 project: " + root)
+    mine = [t for t in data["tasks"].values() if t["handoff"] and t["handoff"]["source_session"] == sid
+            and t["handoff"]["state"] == "prepared"]
+    side = [t for t in mine if (t.get("work") or {}).get("mode") == "side-branch"]
+    pushes = {}
+    if side and gitops.is_repo(root):
+        left = gitops.changed_files(root)
+        if left and core.in_cloud():
+            raise store.Refused("work not saved yet, it would be lost with this cloud session: %s. Commit it to its "
+                                "task first: `sg handoff write <TASK-ID> --technical ... --paths <files>`" % (
+                                    ", ".join(left[:10])))
         c = gitops.commit_paths(root, "Session Guard 2.0: hand-off from %s (%s)\n\nSESSION-GUARD: 2.0" % (
             sid, data["project_id"]))
         if c.get("error"):
             raise store.Refused("commit failed: " + c["error"])
-        push = gitops.push_verified(root)
-    else:
-        push = {"verified": False, "why": "not a git repository: hand-off kept in this folder only"}
-    n = store.mutate(root, lambda d: store.mark_published(d, sid, push))
-    if gitops.is_repo(root) and n:
+        for t in side:
+            pushes[t["id"]] = gitops.push_verified(root, t["work"]["branch"])
+    n = store.mutate(root, lambda d: store.mark_published(d, sid, pushes))
+    if pushes:
         gitops.commit_paths(root, "Session Guard 2.0: hand-off state (%s)\n\nSESSION-GUARD: 2.0" % sid)
-        if push.get("verified"):
-            push = gitops.push_verified(root)
-    out("hand-offs marked: %d · push %s%s" % (n, "VERIFIED %s" % push["commit"][:12] if push.get("verified") else
-                                              "NOT VERIFIED", "" if push.get("verified") else " (%s)" % push.get("why")))
-    return 0 if push.get("verified") or not gitops.is_repo(root) else 1
+        for tid, p in list(pushes.items()):
+            if p.get("verified"):
+                again = gitops.push_verified(root, p["branch"])
+                pushes[tid] = again if again.get("verified") else p
+    lines = ["hand-offs marked: %d" % n]
+    for t in mine:
+        p = pushes.get(t["id"])
+        if p:
+            lines.append("%s → %s: push %s" % (t["id"], t["work"]["branch"], "VERIFIED %s" % p["commit"][:12]
+                                                if p.get("verified") else "NOT VERIFIED (%s)" % p.get("why")))
+        else:
+            lines.append("%s: kept in this folder (%s)" % (t["id"], root))
+    out("\n".join(lines))
+    return 1 if any(not p.get("verified") for p in pushes.values()) else 0
 
 
 def cmd_migrate(a):
@@ -294,8 +435,11 @@ def parser():
     i.add_argument("--approval")
 
     h = sub.add_parser("handoff", parents=[common])
-    h.add_argument("action", choices=["write", "publish"])
+    h.add_argument("action", choices=["write", "publish", "adopt"])
     h.add_argument("id", nargs="?")
+    h.add_argument("--paths", nargs="+")
+    h.add_argument("--no-files", action="store_true")
+    h.add_argument("--side-branch", action="store_true")
     h.add_argument("--technical")
     h.add_argument("--done", action="append")
     h.add_argument("--pending", action="append")

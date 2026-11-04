@@ -21,3 +21,7 @@ as self-modification, measured with 1.4).
    the branch is protected); until then new sessions do not have Session Guard.
 6. Tell the user: Session Guard runs in every new cloud session of this repository; sessions opened before stay
    unprotected and cannot be locked from here (archive them at claude.ai/code). No quota protection in the cloud.
+7. Hand-offs in the cloud: each unfinished task's work is committed and pushed to its own side branch
+   `sg/<task-id>`; a new session (started from the default branch) is told which side branches hold hand-offs and
+   merges one with `sg handoff adopt <branch>`. The user merges finished side branches into the default branch.
+8. Update: run steps 1, 2 and 4 again (`$SG install cloud "$REPO"` replaces the copy), commit, push.

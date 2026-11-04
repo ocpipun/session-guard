@@ -18,7 +18,7 @@ import re
 import sys
 import time
 
-from . import SG_VERSION, core, legacy, measure, messages, migrate, render, rules, sessions, store
+from . import SG_VERSION, core, gitops, legacy, measure, messages, migrate, render, rules, sessions, store
 from .messages import msg
 
 ENTRY = None          # set by session_guard.py
@@ -157,12 +157,29 @@ def task_lines(data, sid):
     return out
 
 
+def side_branch_lines(root, data):
+    """Cloud (or a project that uses side branches): hand-offs whose work and record are on a side branch this
+    checkout does not have yet. Their tasks are not in this checkout's store until the branch is merged."""
+    uses = core.in_cloud() or any((t.get("work") or {}).get("mode") == "side-branch" for t in data["tasks"].values())
+    if not uses or not gitops.is_repo(root):
+        return []
+    found = gitops.remote_side_branches(root)
+    if not found:
+        return []
+    names = ", ".join(b for b, _ in found[:10]) + (" (+%d more)" % (len(found) - 10) if len(found) > 10 else "")
+    return ["HAND-OFF BRANCHES not in this checkout: %s. Each holds a task's unfinished work and its hand-off. If the "
+            "user's message is about one, run `sg handoff adopt <branch>` (merges it here), then `sg task show` / "
+            "`sg task claim`; %s" % (names, "with several, ask the user which one." if len(found) > 1 else
+                                     "otherwise ask.")]
+
+
 def start_context(root, rec, data, source):
     parts = [rules.RULES]
     if PROJECT_MODE:
         parts.append(rules.GENERAL_RULES)  # no global CLAUDE.md in a cloud session
     else:
         res = rules.ensure_global_block()
+        rules.remove_v1_block()  # a 1.x session started before the update may have written it back
         if res == "broken":
             parts.append("WARNING: the session-guard2 markers in ~/.claude/CLAUDE.md are damaged; tell the user "
                          "(skill setup repairs it).")
@@ -170,7 +187,7 @@ def start_context(root, rec, data, source):
         rec["sg_id"], core.place(), "resumed" if source == "resume" else "new", sg_cmd())
     if data:
         head += " · PROJECT-ID %s (%s)" % (data["project_id"], root)
-        parts.append("\n".join([head] + task_lines(data, rec["sg_id"])))
+        parts.append("\n".join([head] + task_lines(data, rec["sg_id"]) + side_branch_lines(root, data)))
         status = core.exists_ci(root, "docs/STATUS.md")
         if status:
             parts.append("docs/STATUS.md (already loaded, do not read again):\n\n" + (core.read_text(status) or "")[:8000])
@@ -422,8 +439,12 @@ def handoff_todo(data, sid):
     mine = [t["id"] for t in store.owned_open(data, sid)]
     if not mine:
         return "you own no open task: no hand-off needed"
-    return "tasks you own: %s; hand-off still missing for: %s; then `%s handoff publish`" % (
-        ", ".join(mine), ", ".join(missing) or "none", sg_cmd())
+    return ("tasks you own: %s; hand-off still missing for: %s. First bring each task's work to a hand-off-ready "
+            "point (finish the small step in progress, leave nothing half-written), then `%s handoff write <id> "
+            "--technical ...`%s, then `%s handoff publish`" % (
+                ", ".join(mine), ", ".join(missing) or "none", sg_cmd(),
+                " (cloud: it commits the task's work for its side branch; with several tasks add --paths)"
+                if core.in_cloud() else "", sg_cmd()))
 
 
 def restore_status(root):
@@ -546,13 +567,15 @@ def on_tool(inp):
 
 # --- stop / end ----------------------------------------------------------------------------------
 def on_stop(inp):
-    """After "finish session" or a break hand-off: Claude is kept working (twice at most) while a task it owns has
-    no hand-off yet or one not yet published."""
+    """After "finish session", a break hand-off or the 300k / 800k hand-off: Claude is kept working (twice at most)
+    while a task it owns has no hand-off yet or one not yet published, or, in the cloud, while work is not saved
+    (a cloud checkout is gone with its session)."""
     root = core.project_root(inp)
     if activation(root) != "active" or subagent(inp):
         return 0
     rec, known = sessions.load(inp.get("session_id"))
-    if not known or not ({"finish", "break"} & set(rec["locks"])) or rec.get("stop_blocks", 0) >= 2:
+    if not known or rec.get("stop_blocks", 0) >= 2 or not (
+            {"finish", "break"} & set(rec["locks"]) or measure.handed(rec)):
         return 0
     data = store.load(root) if root else None
     if not data:
@@ -560,14 +583,21 @@ def on_stop(inp):
     sid = rec["sg_id"]
     missing = store.missing_handoffs(data, sid)
     unpublished = [t["id"] for t in store.owned_open(data, sid) if t["handoff"] and t["handoff"]["state"] == "prepared"]
-    if not missing and not unpublished:
+    unsaved = gitops.changed_files(root) if core.in_cloud() and gitops.is_repo(root) and store.owned_open(data, sid) \
+        else []
+    if not missing and not unpublished and not unsaved:
         return 0
     rec["stop_blocks"] = rec.get("stop_blocks", 0) + 1
     sessions.save(rec)
-    return emit({"decision": "block", "reason": "Session Guard 2.0: before the session closes, %s%s." % (
-        "write the hand-off for %s (`%s handoff write <id> --technical ...`)" % (", ".join(missing), sg_cmd())
-        if missing else "", "%spublish the hand-offs (`%s handoff publish`)" % ("; then " if missing else "", sg_cmd())
-        if missing or unpublished else "")})
+    todo = []
+    if unsaved:
+        todo.append("save the unfinished work (%s) to its task: `%s handoff write <id> --technical ... --paths "
+                    "<files>`" % (", ".join(unsaved[:8]), sg_cmd()))
+    if missing:
+        todo.append("write the hand-off for %s (`%s handoff write <id> --technical ...`)" % (", ".join(missing), sg_cmd()))
+    todo.append("publish the hand-offs (`%s handoff publish`)" % sg_cmd())
+    return emit({"decision": "block", "reason": "Session Guard 2.0: before the session closes, %s." % "; then ".join(
+        todo)})
 
 
 def on_session_end(inp):

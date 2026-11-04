@@ -63,7 +63,8 @@ def init(root, name=None, home=None, migrated=False, migration_session=None):
         os.makedirs(core.project_dir(root), exist_ok=True)
         gi = os.path.join(core.project_dir(root), ".gitignore")
         if not os.path.exists(gi):
-            core.write_text(gi, "# SESSION-GUARD: 2.0 | component: project-gitignore | version: 2.0.0\nstore.lock\n*.tmp\n")
+            core.write_text(gi, "# SESSION-GUARD: 2.0 | component: project-gitignore | version: 2.0.0\nstore.lock\n*.tmp\n"
+                                "__pycache__/\n*.pyc\n")
         core.write_json(path(root), data)
         return data, True
 
@@ -360,8 +361,16 @@ def relate(data, sid, tid, other, relation="related"):
 
 # --- hand-offs ------------------------------------------------------------------------------------
 HANDOFF_FIELDS = ("project_id", "task_id", "source_session", "session_parent", "session_children", "last_developer",
-                  "status", "done", "pending", "owner", "branch", "pr", "technical", "user_command", "created",
+                  "status", "done", "pending", "owner", "branch", "pr", "technical", "user_command", "work", "created",
                   "state", "push")
+
+
+def set_work(data, sid, tid, work):
+    """Where the task's unfinished work is: {"mode": "folder" | "side-branch", ...} (cli `handoff write`)."""
+    t = task(data, tid)
+    _check_owner(data, sid, t)
+    t["work"] = work
+    return t
 
 
 def handoff(data, sid, tid, technical, done=(), pending=(), developer=None, branch=None, pr=None, user_command=None):
@@ -383,15 +392,21 @@ def handoff(data, sid, tid, technical, done=(), pending=(), developer=None, bran
          "done": list(t["done"]), "pending": list(t["pending"]), "owner": t["owner"], "branch": branch, "pr": pr,
          "technical": technical.strip(),
          "user_command": user_command if user_command is not None else
-         (old or {}).get("user_command") or t.get("pending_user_command"),
+         (old or {}).get("user_command") or t.get("pending_user_command"), "work": t.get("work"),
          "created": core.iso(), "state": "prepared", "push": None}
     if old and not old.get("stale") and all(old.get(f) == h[f] for f in HANDOFF_FIELDS
-                                           if f not in ("created", "state", "push")):
+                                           if f not in ("created", "state", "push", "work")) \
+            and _same_work(old.get("work"), h["work"]):
         return "unchanged"
     t["handoff"] = h
     t["updated"] = core.iso()
     data["events"].append(("handoff_prepared", tid))
     return "prepared"
+
+
+def _same_work(a, b):
+    skip = ("saved", "pushed")
+    return {k: v for k, v in (a or {}).items() if k not in skip} == {k: v for k, v in (b or {}).items() if k not in skip}
 
 
 def record_user_command(data, sid, command):
@@ -403,13 +418,18 @@ def record_user_command(data, sid, command):
             t["pending_user_command"] = command
 
 
-def mark_published(data, sid, push):
+def mark_published(data, sid, pushes):
+    """pushes: {task id: push result}; a task missing from it keeps its work in the folder (state "local")."""
     n = 0
     for t in data["tasks"].values():
         h = t["handoff"]
         if h and h["source_session"] == sid and h["state"] == "prepared":
-            h["state"] = "published" if push.get("verified") else "local"
+            push = pushes.get(t["id"])
+            h["state"] = "published" if push and push.get("verified") else "local"
             h["push"] = push
+            if push and push.get("verified") and t.get("work"):
+                t["work"]["pushed"] = push["commit"]
+                h["work"] = dict(t["work"])
             n += 1
     return n
 
@@ -442,6 +462,107 @@ def end_session(data, sid, reason):
     for t in owned_open(data, sid):
         if not t["handoff"] and "orphaned" not in t["flags"]:
             t["flags"].append("orphaned")
+
+
+# --- merging two copies of the store (git merge of a side branch) ------------------------------------
+STATE_ORDER = {"active": 0, "ended": 1, "locked": 2}
+
+
+def merge(ours, theirs):
+    """The union of two stores of one project (a side branch merged into another branch). A task present in both
+    keeps the copy changed last (only its owner changes a task); a session keeps its strongest state (a lock is
+    never undone); counters never go back, so no id is reused."""
+    if ours.get("project_id") != theirs.get("project_id"):
+        raise Refused("different projects: %s / %s" % (ours.get("project_id"), theirs.get("project_id")))
+    theirs = _renumber(ours, theirs)
+    out = dict(ours)
+    out["tasks"] = dict(theirs.get("tasks") or {})
+    for tid, t in (ours.get("tasks") or {}).items():
+        other = out["tasks"].get(tid)
+        if other is None or (t.get("updated") or "") >= (other.get("updated") or ""):
+            out["tasks"][tid] = t
+    out["sessions"] = dict(theirs.get("sessions") or {})
+    for sid, rec in (ours.get("sessions") or {}).items():
+        other = out["sessions"].get(sid)
+        if other is None:
+            out["sessions"][sid] = rec
+            continue
+        keep = dict(rec if STATE_ORDER.get(rec["state"], 0) >= STATE_ORDER.get(other["state"], 0) else other)
+        for f in ("claude_ids", "children", "continues"):
+            keep[f] = list(dict.fromkeys((other.get(f) or []) + (rec.get(f) or [])))
+        out["sessions"][sid] = keep
+    out["ideas"] = dict(theirs.get("ideas") or {})
+    for iid, idea in (ours.get("ideas") or {}).items():
+        if iid not in out["ideas"] or idea["state"] != "waiting":
+            out["ideas"][iid] = idea
+    for f in ("next_task", "next_idea", "rev"):
+        out[f] = max(ours.get(f) or 0, theirs.get(f) or 0)
+    out["rev"] += 1
+    for f in ("legacy_sessions", "migration_sessions"):
+        out[f] = list(dict.fromkeys((theirs.get(f) or []) + (ours.get(f) or [])))
+    out["events"] = []
+    return out
+
+
+def _same(a, b):
+    """One task (or idea) seen on two branches, not two different ones that got the same id there."""
+    first = lambda t: (t.get("owners") or [{}])[0].get("session")
+    return a.get("created", a.get("added")) == b.get("created", b.get("added")) and first(a) == first(b) and \
+        a.get("by") == b.get("by")
+
+
+def _renumber(ours, theirs):
+    """Sessions on two branches (two cloud checkouts) can give the same new id to different tasks. Their tasks keep
+    their content and get the next free ids (subtasks follow their parent); every reference is rewritten."""
+    import copy
+    theirs = copy.deepcopy(theirs)
+    ot, tt = ours.get("tasks") or {}, theirs.get("tasks") or {}
+    nxt = max(ours.get("next_task") or 1, theirs.get("next_task") or 1)
+    taken, mapping = set(ot) | set(tt), {}
+    for tid in sorted(tt, key=sort_key):
+        t = tt[tid]
+        parent = mapping.get(t["parent"], t["parent"])
+        clash = tid in ot and not _same(ot[tid], t)
+        if not clash and parent == t["parent"]:
+            continue
+        if parent is None:
+            new = "TASK-%03d" % nxt
+            nxt += 1
+        else:
+            n = 1
+            while "%s-%d" % (parent, n) in taken:
+                n += 1
+            new = "%s-%d" % (parent, n)
+        taken.add(new)
+        mapping[tid] = new
+    if mapping:
+        fix = lambda x: mapping.get(x, x)
+        tasks = {}
+        for tid, t in tt.items():
+            t["id"], t["parent"] = fix(tid), fix(t["parent"])
+            for r in t.get("related") or []:
+                r["task"] = fix(r["task"])
+            if t.get("handoff"):
+                t["handoff"]["task_id"] = fix(t["handoff"]["task_id"])
+            if tid in mapping:
+                t.setdefault("notes", []).append("%s renumbered from %s (same id given on another branch)" % (
+                    core.today(), tid))
+            tasks[t["id"]] = t
+        theirs["tasks"] = tasks
+        for idea in (theirs.get("ideas") or {}).values():
+            idea["task"] = fix(idea.get("task"))
+    theirs["next_task"] = nxt
+    oi, ti = ours.get("ideas") or {}, theirs.get("ideas") or {}
+    nxi = max(ours.get("next_idea") or 1, theirs.get("next_idea") or 1)
+    ideas = {}
+    for iid in sorted(ti):
+        idea = ti[iid]
+        if iid in oi and not _same(oi[iid], idea):
+            idea["id"] = "IDEA-%03d" % nxi
+            nxi += 1
+        ideas[idea["id"]] = idea
+    theirs["ideas"], theirs["next_idea"] = ideas, nxi
+    return theirs
 
 
 # --- ideas (backlog) ----------------------------------------------------------------------------------
