@@ -66,8 +66,13 @@ A 24-hour watch tells the user when a turn or a background job has been running 
 - **Ownership:** only a task's owner changes it. A free task (no owner, owner ended or locked, or a hand-off
   waiting) can be claimed; a task of an active session only with the user's approval. Owner history is kept.
 - **Limits:** at most 3 normal main tasks, plus 1 urgent one (with a reason and the user's approval) when 3 are
-  active; subtasks unlimited; setup and migration tasks exempt. A new main task needs the user's approval;
-  unrelated work goes to the backlog (`docs/TASK_BACKLOG.md`).
+  active; 10 queued tasks; 10 ideas (temporary ids IDEA-xxx, replaced by the task id when an idea becomes a task).
+  One prompt can bring at most 24; Claude splits a multi-step prompt into this form. Subtasks, setup, migration
+  and rule-script work are not counted. Over the limits Claude tells the user to finish the waiting work first and
+  to plan in a separate project: Session Guard optimizes session cost, it does not manage the project.
+- **No duplicate work:** a new task or idea is compared with every existing one (running, queued, finished,
+  ideas); a near copy is refused, related ones are shown so Claude checks for conflicts or bugs and warns the user.
+- **STATUS Notes:** a bullet written under "## Notes" becomes an idea with an id.
 - **New id when needed:** continuing a task keeps its id; redoing a wrongly finished task or extending a finished
   one is a new task linked to the old one. A finished subtask never finishes its parent.
 - **Safe parallel writes:** one lock per project store, a fresh read inside the lock, revision checks; direct edits
@@ -90,7 +95,7 @@ nothing is left half-written.
 
 When a side branch is merged, conflicts in Session Guard's own files are resolved automatically (tasks are merged;
 two different tasks that got the same id on two branches are renumbered); a conflict in the project's own files
-stops the merge and changes nothing. When a newer session claims a task, the old session is locked once it owns no
+stops the merge and changes nothing. Side branches `sg/<task-id>` hold the project's own unfinished work (its code), not Session Guard's files. Git never deletes a branch when it is merged (GitHub can, for a merged pull request, when the repository setting "Automatically delete head branches" is on), and a cloud session cannot delete branches at all (its GitHub proxy refuses deletions). Delete merged side branches by hand on GitHub. When a newer session claims a task, the old session is locked once it owns no
 open task. Claimed hand-offs go to `STATUS_ARCHIVE.md`.
 
 ## 8. Project files
@@ -130,9 +135,11 @@ small hook that blocks cloud sessions of it. A cloud project carries a copy of S
   continues in a new session with `continue installation`.
 - Notices can be shown in the user's language (`sg install language`).
 - Old task lists are found by content (checkboxes, "To do / Pending / Done" headings), whatever the file is
-  called: their open items become tasks or ideas, finished items lines of `COMPLETED_TASKS.md`, and the old files
-  are retired (removed with the user's yes, a copy kept). CLAUDE.md lines that repeat a status or task line are
-  listed; state leaves CLAUDE.md, so a rule and a task are never copies of each other.
+  called. Their open items become tasks, queued tasks or ideas, finished items lines of `COMPLETED_TASKS.md`; ids
+  show they come from before 2.0 (`PRE20-DONE-xxx`, `PRE20-IDEA-xxx`, tasks marked "pre-2.0"). With the user's yes
+  a file that only listed tasks is deleted whole (no copy), and task text inside other files is cut out, so no
+  agent follows an old list after the migration. CLAUDE.md lines that repeat a status or task line are listed;
+  state leaves CLAUDE.md, so a rule and a task are never copies of each other.
 
 ## 11. Uninstall
 Every step with the user's yes ([setup skill](plugins/session-guard/skills/setup/SKILL.md), "Uninstall").
@@ -141,15 +148,18 @@ Every step with the user's yes ([setup skill](plugins/session-guard/skills/setup
   and completed list, and removes Session Guard's hooks, copy, skills copies and setup marker (`--remove-store`
   also the task store). Then `sg install uninstall` (rules block, status line; `--purge-state` also the machine
   state) and `claude plugin uninstall session-guard@session-guard`, then a full restart.
-- **Cloud repository:** `sg install remove-project` in a session of it, commit, push or pull request. The cloud
-  cannot delete branches, so leftover `sg/*` branches are deleted by the user on GitHub; old cloud sessions are
-  archived at claude.ai/code.
+- **Cloud repository:** `sg install remove-project` in a session of it, commit, push or pull request; old cloud
+  sessions are archived at claude.ai/code.
+- **Warning:** Side branches `sg/<task-id>` hold the project's own unfinished work (its code), not Session Guard's files. Git never deletes a branch when it is merged (GitHub can, for a merged pull request, when the repository setting "Automatically delete head branches" is on), and a cloud session cannot delete branches at all (its GitHub proxy refuses deletions). Delete merged side branches by hand on GitHub.
 
 ## 12. Rules become scripts
-Whenever the project's CLAUDE.md gets new or changed rule lines (also when it is first created), Session Guard asks
-Claude for a rule review: for every rule a script or hook could check, Claude proposes the script as a backlog
-idea, and the user decides. So checks move from Claude (tokens every session) to scripts (no tokens). STATUS.md
-is edited by section, never by line number; empty lines and empty bullets left by an edit are removed.
+Every rule line of CLAUDE.md gets an id (`<!-- R-001 -->`). Whenever CLAUDE.md gets new or changed rules (also
+when it is first created), Session Guard asks Claude for a rule review: conflicts with the other rules (update or
+merge, decided with the user) and, for every rule a script or hook could check, a script proposal as an idea (not
+counted in the idea limit). The user decides; a script task is done only when the script is verified to work, and
+then its rule leaves CLAUDE.md. So checks move from Claude (tokens every session) to scripts (no tokens).
+STATUS.md and CLAUDE.md are edited by section and id, never by line number; empty lines and empty bullets left by
+an edit are removed.
 
 ## 13. Commands
 User: `start long mode`, `finish session`, `continue installation` (at the start followed by a comma or period, or

@@ -480,6 +480,49 @@ def restore_status(root):
             "store. Change tasks only with `sg task ...`; free text goes under \"## Notes\".")
 
 
+def absorb_notes(root, sid):
+    """Bullets written under "## Notes" of STATUS.md become ideas with temporary ids (IDEA-xxx), so nothing in
+    STATUS lives without an id; a bullet the idea limit or the duplicate check refuses stays, with the reason."""
+    path = render.doc(root, "STATUS.md")
+    text = core.read_text(path)
+    if not text or not sid:
+        return None
+    before, body, after = render.split_status(text)
+    if body is None:
+        return None
+    found, inside = [], False
+    for line in after.splitlines():
+        if line.startswith("#"):
+            inside = line.strip().lower().startswith("## notes")
+        elif inside and render.ITEM.match(line):
+            item = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", line).strip()
+            if item.lower().strip(".") not in ("none", "yok"):
+                found.append((line, item))
+    if not found:
+        return None
+    added, refused, gone = [], [], set()
+    for line, item in found:
+        try:
+            added.append(store.mutate(root, lambda d: store.add_idea(d, sid, item, source="status-notes"),
+                                      render=False))
+            gone.add(line)
+        except (store.Refused, core.Busy) as e:
+            refused.append("\"%s\": %s" % (item[:60], e))
+    if gone:
+        keep = [l for l in after.splitlines() if l not in gone]
+        core.write_text(path, text[:len(text) - len(after)] + "\n".join(keep) + ("\n" if keep else ""))
+        try:
+            with core.FileLock(store.lock_path(root)):
+                data = store.load(root)
+                render.render_status(root, data)
+                render.render_backlog(root, data)
+        except core.Busy:
+            pass
+    return "[Session Guard 2.0] STATUS Notes: %s%s" % (
+        "became ideas %s (temporary ids; `sg idea promote` makes a task). " % ", ".join(added) if added else "",
+        ("Refused, still in Notes: " + "; ".join(refused)) if refused else "")
+
+
 def tidy_status(root):
     """Empty lines and empty bullets an edit left in STATUS.md are removed (the generated block is untouched)."""
     path = render.doc(root, "STATUS.md")
@@ -562,10 +605,15 @@ def on_tool(inp):
     extra = []
     edited = os.path.abspath(tool_path(inp)) if inp.get("tool_name") in EDIT_TOOLS and tool_path(inp) else ""
     if edited and os.path.basename(edited).lower() == "status.md" and root and store.is_project(root):
-        r = restore_status(root) or tidy_status(root)
-        if r:
-            extra.append(r)
+        for r in (restore_status(root), absorb_notes(root, rec.get("sg_id")), tidy_status(root)):
+            if r:
+                extra.append(r)
     if edited and root and core.key(edited) == core.key(os.path.join(root, "CLAUDE.md")) and store.is_project(root):
+        text = core.read_text(edited)
+        if text and render.tidy(text) != text:
+            core.write_text(edited, render.tidy(text))
+            extra.append("[Session Guard 2.0] CLAUDE.md: empty lines or empty bullets left by an edit were removed. "
+                         "Edit CLAUDE.md by section and rule id, never by line number.")
         r = rule_review(root, store.load(root), rec)
         if r:
             extra.append(r)

@@ -28,13 +28,17 @@ explicit yes in this conversation; every push needs its own yes.
    lines that repeat a status or task line. If an old session of that project still runs and is reachable, ask it
    for its hand-off instead. The report: current goal, finished work, open work, contradictions, unknowns, and
    which CLAUDE.md rules a script or hook could check. Do not rebuild old sessions' hand-offs one by one.
-3. Write the plan JSON (`sg migrate plan-help`): at most 3 active tasks, the rest as ideas, finished items as
-   "completed"; old task files whose content moved into the plan in "retire" (removed, a copy kept); CLAUDE.md
-   lines that are state or tasks, not rules, in "claude_md_remove" (a rule lives only in CLAUDE.md, a task only in
-   Session Guard's files); script candidates in "rule_scripts" (backlog ideas). Contradictions and unknowns
-   listed, never settled by guessing. Show the user the plan, every file to retire and every CLAUDE.md line to
-   remove by name; on their yes `sg migrate apply "<folder>" --plan <file>` (git: rollback tag; always: file
-   copies; a project without git has NO git rollback: say so), then `sg migrate verify "<folder>"`.
+3. Write the plan JSON (`sg migrate plan-help`): at most 3 active tasks, 10 queued tasks, 10 ideas; finished
+   items as "completed" (they get PRE20-DONE-xxx ids, ideas PRE20-IDEA-xxx, imported tasks are marked pre-2.0);
+   what does not fit in "not_carried" (archived, shown to the user). Files that ONLY listed tasks go into
+   "retire" (deleted whole, no copy); task text inside files used for other things too goes into "remove_text"
+   (exact text cut out); CLAUDE.md lines that are state or tasks, not rules, into "claude_md_remove" (a rule lives
+   only in CLAUDE.md, a task only in Session Guard's files); script candidates into "rule_scripts" (ideas linked
+   to their rule). The old lists must be gone after the migration, so no agent follows them instead of Session
+   Guard. Contradictions and unknowns listed, never settled by guessing. Show the user the plan, every file to
+   delete and every text to cut, by name; on their yes `sg migrate apply "<folder>" --plan <file>` (git: rollback
+   tag; a project without git has NO git rollback, only copies of edited files: say so), then `sg migrate verify
+   "<folder>"`.
 4. Git projects, on the user's yes: `sg migrate push "<folder>" --approval "<their words>"`. Only Session Guard's
    paths are committed; "NOT VERIFIED" means not done.
 5. Old sessions of a migrated project are locked at their next prompt. Cloud sessions opened before cannot be
@@ -64,6 +68,5 @@ Computer, from `session-guard-executive` (run the `sg` steps before the plugin i
    session-guard`); the user fully quits Claude and reopens it. Old locks end with the plugin.
 5. Write one line in the user's PC maintenance log if they keep one.
 Cloud repository (from a cloud session of it, or a computer clone): `sg install remove-project "$REPO"` (same
-choices), commit, push or pull request with the user's yes. Side branches `sg/*` are listed for the user: the
-cloud cannot delete branches (the GitHub proxy refuses deletions), so the user deletes them on GitHub. Old cloud
-sessions: archive them at claude.ai/code.
+choices), commit, push or pull request with the user's yes. Warn the user, in their language: Side branches `sg/<task-id>` hold the project's own unfinished work (its code), not Session Guard's files. Git never deletes a branch when it is merged (GitHub can, for a merged pull request, when the repository setting "Automatically delete head branches" is on), and a cloud session cannot delete branches at all (its GitHub proxy refuses deletions). Delete merged side branches by hand on GitHub.
+Old cloud sessions: archive them at claude.ai/code.

@@ -107,7 +107,8 @@ def lock_path():
 def load():
     data = core.read_json(path(), None)
     if not isinstance(data, dict):
-        data = {"phase": "idle", "started": None, "sessions": [], "budget": {"limit": BUDGET, "used": {}},
+        data = {"signature": "SESSION-GUARD: 2.0", "phase": "idle", "started": None, "sessions": [],
+                "budget": {"limit": BUDGET, "used": {}},
                 "projects": {}, "log": []}
     return data
 
@@ -277,13 +278,18 @@ PLAN_HELP = """Plan file (JSON), written by Claude after reading the survey and 
  "tasks": [{"title": "...", "priority": "P1|P2|P3", "status": "open|in_progress|blocked",
             "done": ["..."], "pending": ["..."], "subtasks": [{"title": "...", "done": [], "pending": []}]}],
  "ideas": ["..."], "completed": ["one line per finished item found"],
- "retire": ["old task / status / hand-off files whose content the plan moved into Session Guard's files"],
+ "queue": [{"title": "...", "priority": "P2", "pending": ["..."]}],
+ "retire": ["files that ONLY listed tasks / status / hand-offs: deleted whole, no copy (content is in the plan)"],
+ "remove_text": [{"file": "README.md", "text": "the exact task text to cut out of a file used for other things too"}],
+ "not_carried": ["items left out because of the limits (listed in the archive)"],
  "claude_md_remove": ["exact CLAUDE.md lines that are state or tasks, not rules (or repeat a task / STATUS line)"],
- "rule_scripts": ["a CLAUDE.md rule a script or hook could check instead of Claude: proposed as a backlog idea"],
+ "rule_scripts": [{"rule": "the exact CLAUDE.md rule line", "script": "what a script or hook would check"}],
  "contradictions": ["..."], "uncertain": ["..."], "sources": ["files and commits the plan rests on"]}
-At most 3 tasks (the active-task limit); the rest goes to ideas. Every open item of the survey's task_list_files
-becomes a task, a subtask or an idea, every finished item a "completed" line; then the file goes into "retire"
-(a copy is kept). A rule stays only in CLAUDE.md, a task or state line only in Session Guard's files: settle each
+At most 3 active tasks, 10 queued tasks and 10 ideas (rule_scripts not counted); the rest in "not_carried", shown to
+the user. Every open item of the survey's task_list_files becomes a task, a subtask, a queued task or an idea,
+every finished item a "completed" line (id PRE20-DONE-xxx; ideas get PRE20-IDEA-xxx, tasks are marked pre-2.0).
+Then a file that only listed tasks goes into "retire" (deleted whole), task text inside other files into
+"remove_text" (cut out), so no agent reads the old lists after the migration. A rule stays only in CLAUDE.md, a task or state line only in Session Guard's files: settle each
 pair of the survey's "duplicates" in the plan."""
 
 
@@ -298,30 +304,56 @@ def _validate_plan(plan):
             raise store.Refused("every plan task needs a title")
     if plan.get("home", "computer") not in ("computer", "cloud"):
         raise store.Refused("home must be computer or cloud")
-    for rel in plan.get("retire") or []:
-        r = str(rel).replace("\\", "/").lstrip("/")
-        if ".." in r.split("/") or r.lower() in ("claude.md", "readme.md", "docs/status.md") or r in SG_DOCS \
+    for rel in list(plan.get("retire") or []) + [x.get("file") for x in plan.get("remove_text") or []
+                                                  if isinstance(x, dict)]:
+        r = str(rel or "").replace("\\", "/").lstrip("/")
+        if not r or ".." in r.split("/") or r.lower() in ("claude.md", "docs/status.md") or r in SG_DOCS \
                 or r.startswith(".claude/session-guard2"):
-            raise store.Refused("cannot retire %s (outside the project, an instruction file or a Session Guard file)" % rel)
+            raise store.Refused("cannot retire or edit %s (outside the project, CLAUDE.md (use claude_md_remove), or a "
+                                "Session Guard file)" % rel)
+    for x in plan.get("remove_text") or []:
+        if not (isinstance(x, dict) and str(x.get("text") or "").strip()):
+            raise store.Refused("remove_text entries are {\"file\": ..., \"text\": \"the exact text to cut\"}")
+    if len(plan.get("queue") or []) > store.MAX_QUEUE or len(plan.get("ideas") or []) > store.MAX_IDEAS:
+        raise store.Refused("at most %d queued tasks and %d ideas: put the rest in \"not_carried\" (they are listed "
+                            "in the archive) and tell the user" % (store.MAX_QUEUE, store.MAX_IDEAS))
+    for t in plan.get("queue") or []:
+        if not str(t.get("title") or "").strip():
+            raise store.Refused("every queued task needs a title")
 
 
 def _retire(root, plan, bdir, report):
-    """After apply: old task files are removed (copies in the backup folder), CLAUDE.md loses its state lines."""
-    retired = []
+    """After apply. A file that only listed tasks is deleted whole (no copy: the user approved it by name, and its
+    content now lives in Session Guard's files); task text inside another file is cut out of it; CLAUDE.md loses
+    its state lines. Git projects: the rollback tag holds the committed versions; a project without git keeps a copy
+    of the files that were only edited (outside the project, so no agent reads it by mistake)."""
+    retired, edited, git = [], [], gitops.is_repo(root)
+
+    def keep_copy(p):
+        if not git:
+            os.makedirs(bdir, exist_ok=True)
+            shutil.copy2(p, os.path.join(bdir, "edited__" + os.path.relpath(p, root).replace(os.sep, "__")))
     for rel in plan.get("retire") or []:
         p = core.exists_ci(root, str(rel).replace("\\", "/"))
         if not p or not os.path.isfile(p):
             report["warnings"].append("retire: %s not found" % rel)
             continue
-        os.makedirs(bdir, exist_ok=True)
-        shutil.copy2(p, os.path.join(bdir, "retired__" + os.path.relpath(p, root).replace(os.sep, "__")))
         os.remove(p)
         retired.append(os.path.relpath(p, root).replace("\\", "/"))
+    for x in plan.get("remove_text") or []:
+        p = core.exists_ci(root, str(x["file"]).replace("\\", "/"))
+        text = core.read_text(p) if p else None
+        cut = str(x["text"]).replace("\r\n", "\n").strip("\n")
+        if not text or text.replace("\r\n", "\n").count(cut) != 1:
+            report["warnings"].append("remove_text: the text was not found exactly once in %s; nothing cut" % x["file"])
+            continue
+        keep_copy(p)
+        core.write_text(p, render.tidy(text.replace("\r\n", "\n").replace(cut, "", 1)))
+        edited.append(os.path.relpath(p, root).replace("\\", "/"))
     lines = [str(l).strip() for l in plan.get("claude_md_remove") or [] if str(l).strip()]
     cm = core.exists_ci(root, "CLAUDE.md")
     if lines and cm:
-        os.makedirs(bdir, exist_ok=True)
-        shutil.copy2(cm, os.path.join(bdir, "CLAUDE.md"))
+        keep_copy(cm)
         text = core.read_text(cm)
         kept, removed = [], []
         for line in text.splitlines(keepends=True):
@@ -332,7 +364,7 @@ def _retire(root, plan, bdir, report):
         core.write_text(cm, render.tidy("".join(kept)))
         report["warnings"] += ["CLAUDE.md line not found, kept nothing: %s" % l for l in lines if l not in removed]
         report["claude_md_removed"] = removed
-    report["retired"] = retired
+    report["retired"], report["edited"] = retired, edited
 
 
 def backup_dir(root):
@@ -380,9 +412,14 @@ def apply(root, plan, migrator_session):
         mig["done"].append("survey, plan, rollback point")
         mig["pending"].append("verify; push (user-approved)")
         mig["owner"] = None
+        origin = "pre-2.0 (%s)" % "; ".join(plan.get("sources") or ["migration"])[:200]
+        for t in plan.get("queue") or []:
+            q = store.new_task(d, migrator_session, t["title"].strip(), priority=t.get("priority", "P2"),
+                               approval="migration plan (user-approved migration)", queue=True, origin=origin)
+            q["done"], q["pending"] = list(t.get("done") or []), list(t.get("pending") or [])
         for t in plan.get("tasks", []):
             nt = store.new_task(d, migrator_session, t["title"].strip(), priority=t.get("priority", "P2"),
-                                approval="migration plan (user-approved migration)")
+                                approval="migration plan (user-approved migration)", origin=origin)
             nt["status"] = t.get("status", "open") if t.get("status") in store.ACTIVE else "open"
             nt["done"], nt["pending"] = list(t.get("done") or []), list(t.get("pending") or [])
             nt["owner"], nt["owners"][0]["how"] = None, "imported by migration (claimable)"
@@ -391,7 +428,8 @@ def apply(root, plan, migrator_session):
                 st["done"], st["pending"] = list(s.get("done") or []), list(s.get("pending") or [])
                 st["owner"], st["owners"][0]["how"] = None, "imported by migration (claimable)"
         for idea in plan.get("ideas") or []:
-            store.add_idea(d, migrator_session, idea, source="migration")
+            store.add_idea(d, migrator_session, str(idea), source="migration (pre-2.0)", force="migration plan",
+                           prefix="PRE20-IDEA")
         d["legacy_sessions"] = [s["claude_id"] for s in legacy_sessions(root)]
         d["migrated_at"] = core.now()
         if migrator_session not in d["migration_sessions"]:
@@ -400,16 +438,21 @@ def apply(root, plan, migrator_session):
     mig_id = store.mutate(root, fn)
     if plan.get("home", "computer") == "computer" and place.ensure_home_guard(root):
         report["warnings"].append("computer guard added to .claude/settings.json (blocks cloud sessions once pushed)")
-    for line in plan.get("completed") or []:
-        core.append_text(render.doc(root, "COMPLETED_TASKS.md"),
-                         "- %s %s imported (pre-2.0): %s\n" % (core.today(), render.SIGN, line))
+    pid = store.load(root)["project_id"]
+    for n, line in enumerate(plan.get("completed") or [], 1):
+        core.append_text(render.doc(root, "COMPLETED_TASKS.md"), "- %s %s %s PRE20-DONE-%03d · %s · done before "
+                         "Session Guard 2.0\n" % (core.today(), render.SIGN, pid, n, line))
     _retire(root, plan, bdir, report)
     from . import rules as rl
 
     def reviewed(d):
+        rl.mark_reviewed(root, d, migrator_session)
+        by_text = {r["text"]: rid for rid, r in d["rules"].items()}
         for idea in plan.get("rule_scripts") or []:
-            store.add_idea(d, migrator_session, "Script instead of a rule: %s" % idea, source="rule-review")
-        d["rule_review"] = {"lines": rl.project_rule_lines(root), "at": core.iso(), "by": migrator_session}
+            rule = by_text.get(str(idea.get("rule") or "").strip()) if isinstance(idea, dict) else None
+            text = idea.get("script") if isinstance(idea, dict) else idea
+            store.add_idea(d, migrator_session, "Script instead of a rule: %s" % text, source="rule-review",
+                           rule=rule, force="migration plan")
     store.mutate(root, reviewed)
     notes = ["Plan sources: " + "; ".join(plan.get("sources") or ["-"])]
     notes += ["Contradiction: " + c for c in plan.get("contradictions") or []]
@@ -421,7 +464,9 @@ def apply(root, plan, migrator_session):
                                                    report["rollback"]["tag"]))
     if report["backup"]:
         notes.append("File copies before migration: " + report["backup"])
-    notes += ["Retired (content moved into Session Guard's files; copy kept): " + r for r in report["retired"]]
+    notes += ["Retired (only listed tasks; content moved into Session Guard's files): " + r for r in report["retired"]]
+    notes += ["Task text cut out (moved into Session Guard's files): " + r for r in report["edited"]]
+    notes += ["Not carried over (limit 10 queued tasks / 10 ideas): %s" % c for c in plan.get("not_carried") or []]
     notes += ["Removed from CLAUDE.md (state, not a rule): " + r for r in report.get("claude_md_removed") or []]
     render.append_archive(root, "Migration to Session Guard 2.0 (%s)" % store.load(root)["project_id"], notes)
     pid = store.load(root)["project_id"]
@@ -429,7 +474,7 @@ def apply(root, plan, migrator_session):
     def upd(d):
         d["projects"][core.key(root)].update(state="applied", project_id=pid, migration_task=mig_id,
                                              rollback=report["rollback"], backup=report["backup"],
-                                             retired=report["retired"],
+                                             retired=report["retired"] + report["edited"],
                                              warnings=report["warnings"], updated=core.iso())
         log(d, "apply: %s -> %s" % (root, pid))
     change(upd)
@@ -490,7 +535,8 @@ def push(root, approval):
     if not gitops.is_repo(root):
         return {"verified": False, "why": "not a git repository: nothing to push (no remote rollback guarantee)"}
     data = store.load(root)
-    gone = [r for r in rec.get("retired") or [] if gitops.git(root, "ls-files", "--error-unmatch", "--", r)[0] == 0]
+    gone = [r for r in rec.get("retired") or [] if gitops.git(root, "ls-files", "--error-unmatch", "--", r)[0] == 0
+            or os.path.exists(os.path.join(root, r))]
     if gone:
         c = gitops.commit_work(root, gone, "Session Guard 2.0: retire old task files of %s (moved into Session "
                                "Guard's files)\n\nSESSION-GUARD: 2.0" % data["name"])

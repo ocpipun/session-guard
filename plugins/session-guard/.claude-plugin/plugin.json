@@ -1,6 +1,6 @@
 {
   "name": "session-guard",
-  "description": "Session Guard 2.0: measures context, breaks and quota, locks finished sessions, gives every project, session and task an id, guards task ownership and hand-offs, and migrates projects from 1.x.",
+  "description": "Session Guard 2.0: measures context, breaks and quota, locks finished sessions, gives every project, session and task an id, guards task ownership and hand-offs, and migrates projects from 1.x. (SESSION-GUARD: 2.0 | component: plugin-json | version: 2.0.0)",
   "version": "2.0.0",
   "author": {
     "name": "ocpipun"

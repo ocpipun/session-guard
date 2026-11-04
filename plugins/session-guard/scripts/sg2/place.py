@@ -33,7 +33,7 @@ def python_cmd(path, args):
 
 
 def statusline_command(entry):
-    return python_cmd(entry, "statusline") + " # " + STATUSLINE_SIGN
+    return python_cmd(entry, "statusline") + " # " + STATUSLINE_SIGN + " SESSION-GUARD: 2.0"
 
 
 def load_settings(path):
@@ -98,7 +98,8 @@ def statusline():
 def home_guard_command():
     block = json.dumps({"decision": "block", "reason": "Session Guard: this repository is a computer project. Your "
                         "message was not sent. Continue it on the computer."}).replace("'", "\\u0027")
-    return "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && printf '%%s' '%s'; exit 0 # %s" % (block, HOME_SIGN)
+    return "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && printf '%%s' '%s'; exit 0 # %s SESSION-GUARD: 2.0" % (
+        block, HOME_SIGN)
 
 
 def ensure_home_guard(root):
@@ -134,7 +135,7 @@ def ensure_home_guard(root):
 def copy_command(args=""):
     return ('S="$CLAUDE_PROJECT_DIR/.claude/session-guard2/bin/scripts/session_guard.py"; [ -f "$S" ] || exit 0; '
             'if [ "$OS" = "Windows_NT" ]; then python -I "$S" --project%s; else python3 -I "$S" --project%s; fi'
-            % (args, args))
+            ' # SESSION-GUARD: 2.0' % (args, args))
 
 
 def copy_hooks():
@@ -186,7 +187,8 @@ def install_copy(root):
         added += 1
     save_settings(p, s)
     core.write_json(os.path.join(core.project_dir(root), "setup.json"),
-                    {"rules": rules.RULES_VERSION, "session_guard": "2.0.0", "date": core.today()})
+                    {"signature": "SESSION-GUARD: 2.0", "rules": rules.RULES_VERSION, "session_guard": "2.0.0",
+                     "date": core.today()})
     return "copied to %s; hooks added: %d" % (COPY_DIR.replace("\\", "/"), added)
 
 

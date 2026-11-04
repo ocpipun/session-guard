@@ -10,15 +10,23 @@ lock: nobody edits the task part of STATUS by hand, so two sessions cannot overw
 """
 import os
 
-from . import SG_VERSION, core
+import difflib
+import re
+
+from . import SG_VERSION, SIGNATURE, core
 
 SCHEMA = 1
 ACTIVE = ("open", "in_progress", "blocked")
+QUEUED = "queued"
 CLOSED = ("done", "cancelled")
-KINDS = ("normal", "urgent", "setup", "migration")
+KINDS = ("normal", "urgent", "setup", "migration", "rule-script")
 EXEMPT = ("setup", "migration")
 PRIORITIES = ("P1", "P2", "P3")
 MAX_NORMAL, MAX_URGENT, MAX_MAIN = 3, 1, 4
+MAX_QUEUE, MAX_IDEAS = 10, 10   # waiting main tasks, waiting ideas; subtasks and rule-script work not counted
+LIMIT_TELL = ("Tell the user: Session Guard keeps at most 3 active (+1 urgent) main tasks, 10 queued tasks and 10 "
+              "ideas; it guards session cost, not project planning. Finish the waiting work first; for planning "
+              "beyond this, open a separate project and plan there.")
 
 
 class Refused(Exception):
@@ -43,10 +51,10 @@ def is_project(root):
 
 
 def blank(name, home):
-    return {"schema": SCHEMA, "session_guard": SG_VERSION, "project_id": core.new_project_id(), "name": name,
-            "home": home, "created": core.iso(), "migrated_at": None, "migration_sessions": [], "rev": 0,
-            "next_task": 1, "next_idea": 1, "tasks": {}, "sessions": {}, "ideas": {}, "legacy_sessions": [],
-            "events": []}
+    return {"signature": SIGNATURE, "schema": SCHEMA, "session_guard": SG_VERSION, "project_id": core.new_project_id(),
+            "name": name, "home": home, "created": core.iso(), "migrated_at": None, "migration_sessions": [],
+            "rev": 0, "next_task": 1, "next_idea": 1, "next_rule": 1, "tasks": {}, "sessions": {}, "ideas": {},
+            "rules": {}, "legacy_sessions": [], "events": []}
 
 
 def init(root, name=None, home=None, migrated=False, migration_session=None):
@@ -95,11 +103,46 @@ def main_counts(data):
     normal = urgent = 0
     for t in data["tasks"].values():
         if t["parent"] is None and t["status"] in ACTIVE:
-            if t["kind"] == "normal":
+            if t["kind"] in ("normal", "rule-script"):
                 normal += 1
             elif t["kind"] == "urgent":
                 urgent += 1
     return normal, urgent
+
+
+def queue_count(data):
+    return sum(1 for t in data["tasks"].values()
+               if t["parent"] is None and t["status"] == QUEUED and t["kind"] != "rule-script")
+
+
+def idea_count(data):
+    return sum(1 for i in data["ideas"].values() if i["state"] == "waiting" and i.get("source") != "rule-review")
+
+
+def _words(text):
+    return " ".join(re.sub(r"[^\w ]+", " ", (text or "").lower()).split())
+
+
+def similar(data, text, at_least=0.6, skip=()):
+    """Existing tasks and ideas close to a new one: [(score, id, kind, status, title)], best first. A near copy
+    (0.85+) is refused as a duplicate; the rest is shown so Claude checks it for conflicts or bugs."""
+    me, out = _words(text), []
+    items = [(t["id"], "task", t["status"], t["title"]) for t in data["tasks"].values()] + \
+            [(i["id"], "idea", i["state"], i["text"]) for i in data["ideas"].values()]
+    for iid, kind, state, title in items:
+        if iid in skip:
+            continue
+        score = difflib.SequenceMatcher(None, me, _words(title)).ratio()
+        if score >= at_least:
+            out.append((round(score, 2), iid, kind, state, title))
+    return sorted(out, reverse=True)[:5]
+
+
+def related_text(found):
+    if not found:
+        return ""
+    return ("Related existing work (check it for overlap, conflict or a bug the new work could cause; warn the "
+            "user if so): " + "; ".join("%s %s (%s, %s) \"%s\"" % (i, k, s, sc, t[:60]) for sc, i, k, s, t in found))
 
 
 def validate(data):
@@ -194,10 +237,13 @@ def _check_owner(data, sid, t):
         raise Refused("session %s is locked (%s): it changes nothing any more" % (sid, rec["lock_reason"]))
 
 
-def new_task(data, sid, title, kind="normal", priority="P2", parent=None, approval=None, reason=None, related=()):
+def new_task(data, sid, title, kind="normal", priority="P2", parent=None, approval=None, reason=None, related=(),
+             queue=False, rule=None, origin=None):
     title = (title or "").strip()
     if not title:
         raise Refused("a task needs a title")
+    if queue and parent:
+        raise Refused("only a main task waits in the queue; a subtask is opened under its task when work starts")
     if kind not in KINDS:
         raise Refused("kind must be one of " + ", ".join(KINDS))
     if priority not in PRIORITIES:
@@ -208,12 +254,19 @@ def new_task(data, sid, title, kind="normal", priority="P2", parent=None, approv
             raise Refused("%s is %s: a closed task gets no new subtask; open a new task related to it "
                           "(`sg task reopen %s`)" % (parent, p["status"], parent))
         kind = p["kind"] if p["kind"] in EXEMPT else "normal"
+    elif queue:
+        if kind not in ("normal", "rule-script"):
+            raise Refused("only normal and rule-script tasks wait in the queue")
+        if not (approval or "").strip():
+            raise Refused("a queued task needs the user's approval: --approval \"<the user's words>\"")
+        if kind != "rule-script" and queue_count(data) >= MAX_QUEUE:
+            raise Refused("10 tasks already wait in the queue. " + LIMIT_TELL)
     else:
         if kind not in EXEMPT and not (approval or "").strip():
             raise Refused("a new active main task needs the user's approval: ask the user, then pass "
                           "--approval \"<the user's words>\". Unrelated work goes to the backlog (`sg idea add`)")
         normal, urgent = main_counts(data)
-        if kind == "normal" and normal >= MAX_NORMAL:
+        if kind in ("normal", "rule-script") and normal >= MAX_NORMAL:
             raise Refused("3 normal main tasks are active. Finish one, put the work in the backlog (`sg idea add`), "
                           "or, if it cannot wait, ask the user for one urgent task (--kind urgent --reason ...)")
         if kind == "urgent":
@@ -229,7 +282,10 @@ def new_task(data, sid, title, kind="normal", priority="P2", parent=None, approv
         "id": tid, "title": title, "kind": kind, "priority": priority, "status": "open", "parent": parent,
         "owner": sid, "owners": [{"session": sid, "from": core.iso(), "to": None, "how": "created"}],
         "done": [], "pending": [], "notes": [], "related": [], "approval": approval, "reason": reason,
-        "created": core.iso(), "updated": core.iso(), "completed": None, "handoff": None, "flags": []}
+        "created": core.iso(), "updated": core.iso(), "completed": None, "handoff": None, "flags": [],
+        "rule": rule, "origin": origin}
+    if queue:
+        t["status"], t["owner"], t["owners"][0]["how"] = QUEUED, None, "queued by %s" % sid
     for rel_id, relation in related:
         task(data, rel_id)
         t["related"].append({"task": rel_id, "relation": relation})
@@ -238,6 +294,19 @@ def new_task(data, sid, title, kind="normal", priority="P2", parent=None, approv
         if back not in data["tasks"][rel_id]["related"]:
             data["tasks"][rel_id]["related"].append(back)
     data["events"].append(("task_new", tid))
+    return t
+
+
+def start(data, sid, tid):
+    """A queued task becomes active and this session's (the active-task limit applies)."""
+    t = task(data, tid)
+    if t["status"] != QUEUED:
+        raise Refused("%s is %s, not queued" % (tid, t["status"]))
+    normal, urgent = main_counts(data)
+    if normal >= MAX_NORMAL:
+        raise Refused("3 normal main tasks are active: finish one before starting %s" % tid)
+    t["status"] = "open"
+    _transfer(data, t, sid, "started from the queue")
     return t
 
 
@@ -317,12 +386,22 @@ def note(data, sid, tid, done=(), pending=(), resolved=(), status=None, priority
     return t
 
 
-def close(data, sid, tid, status="done", summary=None, force=False):
-    """A subtask closing never closes its parent; a parent with open subtasks closes only with force."""
+def close(data, sid, tid, status="done", summary=None, force=False, verified=None):
+    """A subtask closing never closes its parent; a parent with open subtasks closes only with force. A rule-script
+    task is done only when the script was checked to work (verified); then its CLAUDE.md rule is removed."""
     t = task(data, tid)
     _check_owner(data, sid, t)
     if t["status"] in CLOSED:
         return "already " + t["status"]
+    if t["kind"] == "rule-script" and status == "done" and t.get("rule"):
+        if not (verified or "").strip():
+            raise Refused("%s replaces rule %s with a script: pass --verified \"<how you checked that it works>\" "
+                          "(the rule line is removed from CLAUDE.md then)" % (tid, t["rule"]))
+        t["done"].append("verified: " + verified.strip())
+        r = (data.get("rules") or {}).get(t["rule"])
+        if r:
+            r["state"], r["replaced_by"] = "replaced by script", tid
+        data["events"].append(("rule_replaced", t["rule"]))
     open_kids = [c["id"] for c in children(data, tid) if c["status"] in ACTIVE]
     if open_kids and not force:
         raise Refused("%s has open subtasks (%s): close them first, or pass --force after asking the user" % (
@@ -495,7 +574,8 @@ def merge(ours, theirs):
     for iid, idea in (ours.get("ideas") or {}).items():
         if iid not in out["ideas"] or idea["state"] != "waiting":
             out["ideas"][iid] = idea
-    for f in ("next_task", "next_idea", "rev"):
+    out["rules"] = dict(theirs.get("rules") or {}, **(ours.get("rules") or {}))
+    for f in ("next_task", "next_idea", "next_rule", "next_pre20_idea", "rev"):
         out[f] = max(ours.get(f) or 0, theirs.get(f) or 0)
     out["rev"] += 1
     for f in ("legacy_sessions", "migration_sessions"):
@@ -566,18 +646,36 @@ def _renumber(ours, theirs):
 
 
 # --- ideas (backlog) ----------------------------------------------------------------------------------
-def add_idea(data, sid, text, source=None):
-    iid = "IDEA-%03d" % data["next_idea"]
-    data["next_idea"] += 1
-    data["ideas"][iid] = {"id": iid, "text": text.strip(), "by": sid, "added": core.iso(), "source": source,
-                          "state": "waiting", "task": None}
+def add_idea(data, sid, text, source=None, rule=None, force=None, prefix="IDEA"):
+    """An idea gets a temporary id (IDEA-xxx); when it becomes a task the task id replaces it. At most 10 wait
+    (rule-review ideas not counted); a near copy of an existing task or idea is refused."""
+    text = (text or "").strip()
+    if not text:
+        raise Refused("an idea needs a text")
+    if source != "rule-review" and idea_count(data) >= MAX_IDEAS:
+        raise Refused("10 ideas already wait. " + LIMIT_TELL)
+    dup = [f for f in similar(data, text, 0.85)]
+    if dup and not (force or "").strip():
+        raise Refused("this is a near copy of %s (%s, %s): \"%s\". Do not add it again; if the user says it is "
+                      "really new, pass --force \"<the user's words>\"" % (dup[0][1], dup[0][2], dup[0][3], dup[0][4]))
+    key = "next_idea" if prefix == "IDEA" else "next_" + prefix.lower().replace("-", "_")
+    n = data.get(key) or 1
+    iid = "%s-%03d" % (prefix, n)
+    while iid in data["ideas"]:
+        n += 1
+        iid = "%s-%03d" % (prefix, n)
+    data[key] = n + 1
+    data["ideas"][iid] = {"id": iid, "text": text, "by": sid, "added": core.iso(), "source": source,
+                          "state": "waiting", "task": None, "rule": rule}
     return iid
 
 
-def promote_idea(data, sid, iid, approval, priority="P2"):
+def promote_idea(data, sid, iid, approval, priority="P2", queue=False):
     idea = data["ideas"].get(iid)
     if not idea or idea["state"] != "waiting":
         raise Refused("no waiting idea " + iid)
-    t = new_task(data, sid, idea["text"], priority=priority, approval=approval)
-    idea["state"], idea["task"] = "promoted", t["id"]
+    rule_work = idea.get("source") == "rule-review"
+    t = new_task(data, sid, idea["text"], kind="rule-script" if rule_work else "normal", priority=priority,
+                 approval=approval, queue=queue, rule=idea.get("rule"), origin="idea %s" % iid)
+    idea["state"], idea["task"] = "promoted", t["id"]  # the task id replaces the temporary idea id
     return t

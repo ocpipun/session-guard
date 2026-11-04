@@ -214,11 +214,11 @@ class Tasks(Base):
         self.assertIn({"task": "TASK-003", "relation": "reopened-by"}, data["tasks"]["TASK-002"]["related"])
 
     def test_backlog_idea_and_promotion(self):
-        self.assertIn("IDEA-002", self.sg("idea", "add", "dark mode", "--session", S1, "--root", self.root))
+        self.assertIn("IDEA-001", self.sg("idea", "add", "dark mode", "--session", S1, "--root", self.root))
         self.assertIn("dark mode", self.text(self.root, "docs", "TASK_BACKLOG.md"))
-        self.assertIn("approval", self.sg("idea", "promote", "IDEA-002", "--session", S1, "--root", self.root,
+        self.assertIn("approval", self.sg("idea", "promote", "IDEA-001", "--session", S1, "--root", self.root,
                                           ok=False))
-        self.sg("idea", "promote", "IDEA-002", "--approval", "ok", "--session", S1, "--root", self.root, ok=True)
+        self.sg("idea", "promote", "IDEA-001", "--approval", "ok", "--session", S1, "--root", self.root, ok=True)
 
     def test_handoff_once_then_claim_archives_and_locks_source(self):
         _, a = self.start("ha", self.root)
@@ -608,8 +608,8 @@ class Cleanup(Base):
         text = self.text(p)
         self.assertNotIn("\n\n\n", text)
         self.assertNotRegex(text, r"(?m)^-\s*$")
-        self.assertIn("- kept note\n- second note\n", text)
-        self.assertNotIn("kept note   ", text)
+        self.assertIn("- IDEA-001 · kept note\n- IDEA-002 · second note\n", text)   # Notes bullets got ids
+        self.assertNotRegex(text.split("## Notes")[1], r"(?m)^- ")
 
     def test_rule_review_on_new_claude_md_rules(self):
         root = self.migrated(files={"CLAUDE.md": "# Rules\n- Answer in Turkish, short sentences.\n"})
@@ -634,6 +634,7 @@ class Cleanup(Base):
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True)
         root = self.project("tl", git=True, files={
             "misc/list.md": "Things\n- [ ] fix login page\n- [x] set up the database\n",
+            "README.md": "# App\nIt runs.\n\n## To do\n- [ ] write docs\n\n## Use\nRun it.\n",
             "CLAUDE.md": "# Rules\n- Short answers.\n- Deploy the login fix before the Friday release\n",
             "docs/STATUS.md": "# S\n- Deploy the login fix before the Friday release.\n"})
         self.git(root, "add", "-A")
@@ -649,6 +650,8 @@ class Cleanup(Base):
         self.assertEqual(survey["duplicates"][0]["rule_line"], "- Deploy the login fix before the Friday release")
         plan = os.path.join(self.home, "tl-plan.json")
         json.dump({"name": "tl", "tasks": [{"title": "fix login page"}], "completed": ["set up the database"],
+                   "queue": [{"title": "write docs"}], "ideas": ["dark theme"], "not_carried": ["old wish"],
+                   "remove_text": [{"file": "README.md", "text": "## To do\n- [ ] write docs"}],
                    "retire": ["misc/list.md"], "claude_md_remove": ["- Deploy the login fix before the Friday release"],
                    "rule_scripts": ["short answers: a reply-length check"]}, open(plan, "w"))
         self.assertIn("cannot retire", self.sg("migrate", "apply", root, "--plan", self.bad_plan(), "--session", S3,
@@ -659,12 +662,21 @@ class Cleanup(Base):
         self.assertIn("- Short answers.", self.text(root, "CLAUDE.md"))
         self.assertIn("set up the database", self.text(root, "docs", "COMPLETED_TASKS.md"))
         self.assertIn("Script instead of a rule: short answers", self.text(root, "docs", "TASK_BACKLOG.md"))
-        self.assertIn("Retired (content moved", self.text(root, "docs", "STATUS_ARCHIVE.md"))
+        self.assertIn("Retired (only listed tasks", self.text(root, "docs", "STATUS_ARCHIVE.md"))
         backups = os.path.join(self.home, ".claude", "session_guard_v2", "backups")
-        self.assertTrue(any("retired__misc__list.md" in fs for _, _, fs in os.walk(backups)))
+        self.assertFalse(any("list.md" in f for _, _, fs in os.walk(backups) for f in fs))   # no copy kept
+        self.assertIn("PRE20-DONE-001 · set up the database", self.text(root, "docs", "COMPLETED_TASKS.md"))
+        self.assertEqual(self.text(root, "README.md"), "# App\nIt runs.\n\n## Use\nRun it.\n")
+        data = self.store(root)
+        q = [t for t in data["tasks"].values() if t["status"] == "queued"]
+        self.assertEqual((q[0]["title"], q[0]["origin"][:7]), ("write docs", "pre-2.0"))
+        self.assertEqual(data["ideas"]["PRE20-IDEA-001"]["text"], "dark theme")
+        self.assertIn("Not carried over (limit 10 queued tasks / 10 ideas): old wish",
+                      self.text(root, "docs", "STATUS_ARCHIVE.md"))
         self.sg("migrate", "verify", root, ok=True)
         self.sg("migrate", "push", root, "--approval", "yes", ok=True)
         self.assertEqual(self.git(bare, "ls-tree", "-r", "--name-only", "main", "misc"), "")  # deletion pushed
+        self.assertNotIn("To do", self.git(bare, "show", "main:README.md"))                   # the cut too
 
     def bad_plan(self):
         p = os.path.join(self.home, "bad-plan.json")
@@ -694,6 +706,57 @@ class Cleanup(Base):
         self.assertIn("removed", out)
         self.assertFalse(os.path.exists(os.path.join(self.home, ".claude", "session_guard_v2")))
         self.assertNotIn("session-guard2:begin", self.text(self.home, ".claude", "CLAUDE.md"))
+
+
+class Limits(Base):
+    """Session Guard guards session cost, not project planning: 3+1 active, 10 queued, 10 ideas; rules by id."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = self.migrated(files={"CLAUDE.md": "# Rules\n- Commit messages start with the task id.\n"})
+
+    def s(self, *args, ok=None):
+        return self.sg(*args, "--session", S1, "--root", self.root, ok=ok)
+
+    def test_queue_and_idea_limits_duplicates_and_start(self):
+        for n in range(10):
+            self.s("task", "new", "--title", "queued work number %d about topic %s" % (n, "abcdefghij"[n] * 6),
+                   "--queue", "--approval", "ok", ok=True)
+        out = self.s("task", "new", "--title", "eleventh", "--queue", "--approval", "ok", ok=False)
+        self.assertIn("10 tasks already wait", out)
+        self.assertIn("open a separate project", out)
+        for n in range(9):                       # the migration brought one idea already
+            self.s("idea", "add", "idea %d on subject %s" % (n, "klmnopqrst"[n] * 6), ok=True)
+        self.assertIn("10 ideas already wait", self.s("idea", "add", "one more", ok=False))
+        self.s("idea", "add", "Script instead of a rule: commit-msg hook", "--source", "rule-review", ok=True)
+        self.assertIn("near copy", self.s("task", "new", "--title", "queued work number 1 about topic bbbbbb",
+                                          "--approval", "ok", ok=True) and
+                      self.s("idea", "add", "idea 0 on subject kkkkkk", "--source", "rule-review", ok=False))
+        out = self.s("task", "start", "TASK-003", ok=True)
+        self.assertIn("started", out)
+        status = self.text(self.root, "docs", "STATUS.md")
+        self.assertIn("## Queue (9/10", status)
+        self.assertLessEqual(len(status.splitlines()), 50)
+
+    def test_rule_ids_and_rule_script_task(self):
+        cm = os.path.join(self.root, "CLAUDE.md")
+        self.assertIn("<!-- R-001 -->", self.text(cm))           # ids given at migration
+        with open(cm, "a", encoding="utf-8") as fh:
+            fh.write("- Never push to main without a review.\n")
+        self.assertIn("Never push", self.sg("rules", "check", "--root", self.root))
+        self.s("rules", "reviewed", ok=True)
+        self.assertIn("review. <!-- R-002 -->", self.text(cm))
+        self.s("idea", "add", "Script instead of a rule: commit-msg hook checks the task id", "--source",
+               "rule-review", "--rule", "R-001", ok=True)
+        out = self.s("idea", "promote", "IDEA-001", "--approval", "ok", ok=True)
+        tid = out.split("→ ")[1].split()[0]
+        self.assertEqual(self.store(self.root)["tasks"][tid]["kind"], "rule-script")
+        self.assertIn("Commit messages", self.text(cm))         # the rule stays until the script is verified
+        self.assertIn("--verified", self.s("task", "done", tid, ok=False))
+        self.s("task", "done", tid, "--verified", "hook rejected a bad message, accepted a good one", ok=True)
+        self.assertNotIn("Commit messages", self.text(cm))
+        self.assertIn("R-002", self.text(cm))
+        self.assertEqual(self.store(self.root)["rules"]["R-001"]["state"], "replaced by script")
 
 
 def glob_one(pattern):

@@ -65,7 +65,7 @@ def rollback_point(root, label):
     if not h:
         return {"ok": False, "why": "no commit yet: no rollback point possible"}
     tag = "sg2-pre-migration-" + re.sub(r"[^A-Za-z0-9-]", "-", label)
-    rc, _, err = git(root, "tag", tag, h)
+    rc, _, err = git(root, "tag", "-a", "-m", "SESSION-GUARD: 2.0 rollback point before migration", tag, h)
     if rc and "already exists" not in err:
         return {"ok": False, "why": err}
     _, status, _ = git(root, "status", "--porcelain")

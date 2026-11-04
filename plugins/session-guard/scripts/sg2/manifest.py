@@ -13,7 +13,7 @@ import re
 
 from . import SG_VERSION, SIGNATURE, core
 
-SIGNED_EXT = (".py", ".md", ".sh")
+SIGNED_EXT = (".py", ".md", ".sh", ".json")  # JSON: the signature sits in a description or "_signature" text
 SIGN_RE = re.compile(r"SESSION-GUARD: (\d+\.\d+) \| component: ([\w.-]+) \| version: ([\d.]+)")
 IMPORT_RE = re.compile(r"^\s*from (?:\.|sg2\.?)(\w*) import ([\w, ]+)", re.M)
 SKIP_DIRS = {"__pycache__"}

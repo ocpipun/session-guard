@@ -161,6 +161,23 @@ push or pull request; `sg/*` branches are deleted by the user on GitHub (the clo
 - Rule review: the store keeps the reviewed CLAUDE.md rule lines (`rule_review`, set at migration from the plan's
   `rule_scripts`). New or changed lines trigger one RULE REVIEW request (session start, or right after an edit of
   CLAUDE.md): Claude proposes a script or hook per enforceable rule as a backlog idea, then `sg rules reviewed`.
+- Limits (user decision 2026-11-04): 3+1 active, 10 queued (status "queued", `sg task start`), 10 waiting ideas
+  (temporary IDEA ids, the task id replaces them on promotion); rule-script tasks and rule-review ideas, subtasks,
+  setup and migration not counted. Over a limit `sg` refuses and tells Claude to send the user to the waiting work
+  or to a separate planning project. New tasks and ideas are compared (difflib) with all tasks and ideas: 0.85+
+  refused as a copy, 0.6+ listed for a conflict / bug check.
+- Rules by id: `rules.mark_reviewed` writes "<!-- R-xxx -->" at the end of each new rule line; the store keeps
+  each id's reviewed text and state; a changed text is reviewed again. A rule-script task closes only with
+  `--verified`, which removes its rule line (event "rule_replaced").
+- STATUS Notes: bullets under "## Notes" become ideas (source status-notes) after an edit of STATUS.md; refused
+  ones stay with the reason.
+- Migration (revised 2026-11-04): files that only listed tasks are deleted whole, without a copy; task text inside
+  other files is cut out ("remove_text"); imported items get pre-2.0 ids (PRE20-DONE-xxx, PRE20-IDEA-xxx; tasks keep
+  TASK ids, marked "pre-2.0", because task ids form one sequence); the rest of the limits goes to "not_carried".
+- Signatures: every file of the plugin carries "SESSION-GUARD: 2.0" (JSON in a description or "_signature"), checked
+  by `sg manifest verify`; so do the files and records Session Guard writes (store, setup marker, config, migration
+  checkpoint, session records, quota readings, archive and completed headers, hook and status line commands, the
+  rollback tag message, commit messages).
 - STATUS hygiene: text outside the generated block is tidied on every render and after every edit of STATUS.md
   (empty bullets, runs of empty lines and gaps inside a list removed, trailing spaces cut): an agent that deletes
   lines by number to keep the other numbers leaves exactly these. STATUS is edited by section.

@@ -32,7 +32,7 @@ def path_for(claude_id):
 
 
 def blank(claude_id):
-    return {"claude_id": claude_id, "sg_id": None, "self": None, "root": None, "project_id": None,
+    return {"signature": "SESSION-GUARD: 2.0", "claude_id": claude_id, "sg_id": None, "self": None, "root": None, "project_id": None,
             "born": None, "long": False, "locks": {}, "notified": [], "ids": [], "asked_at": 0, "stop_blocks": 0,
             "place": core.place()}
 

@@ -20,7 +20,8 @@ BEGIN = "<!-- SESSION-GUARD: 2.0 | sg-status:begin | generated from .claude/sess
         "with `sg` commands, not by hand -->"
 END_RE = re.compile(r"<!-- sg-status:end sha=([0-9a-f]{12}) -->")
 STATUS_HEAD = "# STATUS — %s\n\n"
-NOTES = "\n## Notes\n- None\n"
+NOTES = ("\n## Notes\n<!-- SESSION-GUARD: 2.0 | a bullet written here becomes an idea with a temporary id (IDEA-xxx); "
+         "tasks and ideas are changed with `sg` commands -->\n")
 
 
 def doc(root, name):
@@ -58,6 +59,7 @@ def block_lines(data, compact=0):
     keep = (3, 2, 0)[compact]
     for t in mains:
         flag = " · ORPHANED (owner ended without hand-off)" if "orphaned" in t["flags"] else ""
+        flag += " · pre-2.0" if str(t.get("origin") or "").startswith("pre-2.0") else ""
         lines.append("### %s · %s · %s · %s%s · owner %s%s" % (
             t["id"], t["title"], t["status"], t["priority"], "" if t["kind"] == "normal" else " · " + t["kind"],
             _owner(data, t["owner"]), flag))
@@ -73,6 +75,19 @@ def block_lines(data, compact=0):
                     lines.append("- %s %s · %s · owner %s" % (c["id"], c["title"], c["status"], _owner(data, c["owner"])))
         if t["related"] and compact < 2:
             lines.append("- Related: " + ", ".join("%s (%s)" % (r["task"], r["relation"]) for r in t["related"]))
+    queued = sorted((t for t in data["tasks"].values() if t["parent"] is None and t["status"] == store.QUEUED),
+                    key=lambda t: (t["priority"], store.sort_key(t["id"])))
+    lines += ["", "## Queue (%d/%d; start with `sg task start <id>`)" % (store.queue_count(data), store.MAX_QUEUE)]
+    items = ["%s · %s%s" % (t["id"], t["title"][:70], " · rule %s" % t["rule"] if t.get("rule") else "")
+             for t in queued]
+    lines += (["- " + "; ".join(i.split(" · ")[0] for i in items)] if compact and items else
+              ["- " + i for i in items] or ["- None"])
+    ideas = sorted((i for i in data["ideas"].values() if i["state"] == "waiting"), key=lambda i: i["id"])
+    lines += ["", "## Ideas (%d/%d; temporary ids, a task id replaces them)" % (store.idea_count(data),
+                                                                               store.MAX_IDEAS)]
+    items = ["%s · %s%s" % (i["id"], i["text"][:70], " · rule %s" % i["rule"] if i.get("rule") else "") for i in ideas]
+    lines += (["- " + "; ".join(i.split(" · ")[0] for i in items)] if compact and items else
+              ["- " + i for i in items] or ["- None"])
     waiting = sorted(store.waiting_handoffs(data), key=lambda t: store.sort_key(t["id"]))
     lines += ["", "## Hand-offs waiting (%d)" % len(waiting)]
     if not waiting:
@@ -132,11 +147,20 @@ ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
 
 
 def tidy(text):
-    """Text outside the generated block: trailing spaces cut, empty bullets dropped, runs of empty lines made one.
-    An agent that deleted lines by number (to keep the other line numbers) leaves exactly these behind; STATUS is
-    edited by section (its heading), never by line number."""
-    out, blank = [], True
+    """STATUS text outside the generated block, and CLAUDE.md: trailing spaces cut, empty bullets dropped, runs of
+    empty lines made one, gaps inside a list closed; code fences untouched. An agent that deleted lines by number
+    (to keep the other line numbers) leaves exactly these behind; both files are edited by section and id, never
+    by line number."""
+    out, blank, fence = [], True, False
     for line in text.splitlines():
+        if line.strip().startswith("```"):
+            fence = not fence
+            out.append(line.rstrip())
+            blank = False
+            continue
+        if fence:
+            out.append(line)
+            continue
         line = line.rstrip()
         if EMPTY_ITEM.match(line):
             continue
@@ -182,20 +206,26 @@ def status_lines(root):
 
 
 def render_backlog(root, data):
+    from . import store
     lines = ["# TASK BACKLOG", "", "<!-- SESSION-GUARD: 2.0 | component: task-backlog | generated from the store: "
              "add with `sg idea add`, start with `sg idea promote` (needs the user's approval) -->", "",
              "## Waiting ideas %s" % SIGN]
     waiting = [i for i in sorted(data["ideas"].values(), key=lambda i: i["id"]) if i["state"] == "waiting"]
     lines += ["- %s · %s · %s · %s" % (i["id"], i["added"][:10], i["by"], i["text"]) for i in waiting] or ["- None"]
+    queued = [t for t in sorted(data["tasks"].values(), key=lambda t: store.sort_key(t["id"])) if t["status"] == "queued"]
+    lines += ["", "## Queued tasks"] + (["- %s · %s · %s" % (t["id"], t["priority"], t["title"]) for t in queued]
+                                        or ["- None"])
     promoted = [i for i in data["ideas"].values() if i["state"] == "promoted"]
     if promoted:
         lines += ["", "## Promoted"] + ["- %s → %s" % (i["id"], i["task"]) for i in promoted]
     core.write_text(doc(root, "TASK_BACKLOG.md"), "\n".join(lines) + "\n")
 
 
-COMPLETED_HEAD = ("# COMPLETED TASKS\n\nOne line per finished task, appended by Session Guard 2.0. Details: the "
-                  "task record (`sg task show <id>`) and STATUS_ARCHIVE.md.\n\n")
-ARCHIVE_HEAD = "# STATUS archive\n\nOne dated entry per item. Not read every session: find the heading by search.\n\n"
+COMPLETED_HEAD = ("# COMPLETED TASKS\n\n<!-- SESSION-GUARD: 2.0 | component: completed-tasks -->\nOne line per finished "
+                  "task, appended by Session Guard 2.0 (PRE20-DONE-xxx: finished before Session Guard 2.0). Details: "
+                  "the task record (`sg task show <id>`) and STATUS_ARCHIVE.md.\n\n")
+ARCHIVE_HEAD = ("# STATUS archive\n\n<!-- SESSION-GUARD: 2.0 | component: status-archive -->\nOne dated entry per item. "
+                "Not read every session: find the heading by search.\n\n")
 
 
 def append_completed(root, data, tid):
@@ -247,7 +277,10 @@ def handoff_lines(h):
 
 
 def after_change(root, data, events):
+    from . import rules
     for ev in events:
+        if ev[0] == "rule_replaced":
+            rules.remove_rule(root, ev[1])
         if ev[0] == "task_closed":
             append_completed(root, data, ev[1])
         elif ev[0] == "handoff_claimed":

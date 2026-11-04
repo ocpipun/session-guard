@@ -65,9 +65,15 @@ Kilitli oturuma mesaj ulaşmaz; kullanıcıya nedeni söylenir. Türleri:
   alt görev `TASK-001-1`, `TASK-001-2-1`. Kimlikler hiçbir zaman yeniden kullanılmaz.
 - **Sahiplik:** görevi yalnız sahibi değiştirir. Boştaki görev (sahibi yok, sahibi bitti ya da kilitlendi, ya da
   devir bekliyor) alınabilir; aktif bir oturumun görevi yalnız kullanıcının onayıyla. Sahiplik geçmişi silinmez.
-- **Sınırlar:** en fazla 3 normal ana görev; 3'ü doluysa gerekçeli ve kullanıcı onaylı 1 acil görev; alt
-  görevlerde sınır yok; kurulum ve migration görevleri muaf. Yeni ana görev kullanıcının onayını ister; ilgisiz
-  işler bekleyen fikirlere gider (`docs/TASK_BACKLOG.md`).
+- **Sınırlar:** en fazla 3 normal ana görev; 3'ü doluysa gerekçeli ve kullanıcı onaylı 1 acil görev; 10 sıradaki
+  görev; 10 fikir (geçici kimlik IDEA-xxx; fikir göreve dönüşünce yerini görev kimliği alır). Bir mesajla en fazla
+  24 iş gelebilir; Claude çok adımlı bir mesajı bu biçime kendisi ayırır. Alt görevler, kurulum, migration ve
+  kural-betiği işleri sayılmaz. Sınır aşılırsa Claude kullanıcıya önce bekleyen işleri bitirmesini, planlamayı ayrı
+  bir projede yapmasını söyler: Session Guard oturum maliyetini optimize eder, projeyi yönetmez.
+- **Aynı işi iki kez yapmamak:** yeni görev ya da fikir mevcut hepsiyle (süren, sıradaki, biten, fikirler)
+  karşılaştırılır; neredeyse aynısı reddedilir, benzerleri gösterilir; Claude çakışma ya da hata riskini denetler
+  ve kullanıcıyı uyarır.
+- **STATUS notları:** "## Notes" altına yazılan her madde kimlikli bir fikre dönüşür.
 - **Gerektiğinde yeni kimlik:** kaldığı yerden devam aynı kimlikle; hatalı biten işi yeniden yapmak ya da biten
   işe özellik eklemek eskisine bağlı yeni görevdir. Alt görev bitince üst görev kendiliğinden bitmez.
 - **Güvenli paralel yazma:** proje başına bir kilit, kilit içinde taze okuma, sürüm denetimi; görev kaydının elle
@@ -90,7 +96,7 @@ yarım yazılmış hiçbir şey bırakmaz.
 
 Yan dal birleştirilirken Session Guard'ın kendi dosyalarındaki çakışmalar kendiliğinden çözülür (görevler
 birleştirilir; iki dalda aynı kimliği almış iki farklı göreve yeni kimlik verilir). Projenin kendi dosyalarında
-çakışma olursa birleştirme durur ve hiçbir şey değişmez. Daha yeni bir oturum görevi alınca, açık görevi kalmayan
+çakışma olursa birleştirme durur ve hiçbir şey değişmez. `sg/<görev-kimliği>` yan dalları Session Guard'ın değil, projenin kendi yarım işini (kodunu) taşır. Git, birleştirilen dalı kendiliğinden silmez (GitHub, depo ayarlarında "Automatically delete head branches" açıksa birleştirilen pull request'in dalını siler); bulut oturumu ise hiç dal silemez (GitHub vekili silmeyi reddeder). Birleştirilen yan dalları GitHub'da elle silin. Daha yeni bir oturum görevi alınca, açık görevi kalmayan
 eski oturum kilitlenir. Alınan devir notları `STATUS_ARCHIVE.md`'ye geçer.
 
 ## 8. Proje dosyaları
@@ -130,9 +136,12 @@ bulut oturumlarını engelleyen küçük bir hook bulunur. Bulut projesi Session
   yeni oturumda `continue installation` ile devam eder.
 - Bildirimler kullanıcının dilinde gösterilebilir (`sg install language`).
 - Eski görev listeleri adına bakılmadan içeriğinden bulunur (onay kutuları, "Yapılacak / Bekleyen / Biten"
-  başlıkları): açık maddeleri görev ya da fikir, bitenleri `COMPLETED_TASKS.md` satırı olur; eski dosyalar
-  kullanıcının onayıyla kaldırılır (kopyası saklanır). CLAUDE.md'de bir durum ya da görev satırını tekrar eden
-  satırlar listelenir; durum CLAUDE.md'den çıkar, böylece bir kural ile bir görev birbirinin kopyası olmaz.
+  başlıkları). Açık maddeleri görev, sıradaki görev ya da fikir, bitenleri `COMPLETED_TASKS.md` satırı olur;
+  kimlikler 2.0'dan önce olduklarını gösterir (`PRE20-DONE-xxx`, `PRE20-IDEA-xxx`, görevlerde "pre-2.0"). Kullanıcının
+  onayıyla yalnız görev listeleyen dosya bütünüyle silinir (kopya tutulmaz), başka işe de yarayan dosyalardaki
+  görev metni kesilip çıkarılır; böylece geçişten sonra hiçbir ajan eski listeye uymaz. CLAUDE.md'de bir durum ya
+  da görev satırını tekrar eden satırlar listelenir; durum CLAUDE.md'den çıkar, kural ile görev birbirinin
+  kopyası olmaz.
 
 ## 11. Kaldırma
 Her adım kullanıcının onayıyla ([setup skill'i](plugins/session-guard/skills/setup/SKILL.md), "Uninstall").
@@ -142,15 +151,18 @@ Her adım kullanıcının onayıyla ([setup skill'i](plugins/session-guard/skill
   (`--remove-store` görev kaydını da siler). Sonra `sg install uninstall` (kural bölümü, durum çubuğu;
   `--purge-state` makinedeki durum klasörünü de siler) ve `claude plugin uninstall session-guard@session-guard`,
   ardından Claude tamamen kapatılıp açılır.
-- **Bulut deposu:** deponun bir oturumunda `sg install remove-project`, commit, push ya da pull request. Bulut dal
-  silemez; kalan `sg/*` dallarını kullanıcı GitHub'da siler; eski bulut oturumları claude.ai/code'da arşivlenir.
+- **Bulut deposu:** deponun bir oturumunda `sg install remove-project`, commit, push ya da pull request; eski
+  bulut oturumları claude.ai/code'da arşivlenir.
+- **Uyarı:** `sg/<görev-kimliği>` yan dalları Session Guard'ın değil, projenin kendi yarım işini (kodunu) taşır. Git, birleştirilen dalı kendiliğinden silmez (GitHub, depo ayarlarında "Automatically delete head branches" açıksa birleştirilen pull request'in dalını siler); bulut oturumu ise hiç dal silemez (GitHub vekili silmeyi reddeder). Birleştirilen yan dalları GitHub'da elle silin.
 
 ## 12. Kurallar betiğe dönüşür
-Projenin CLAUDE.md dosyasına yeni ya da değişmiş bir kural satırı geldiğinde (ilk oluşturulduğunda da) Session Guard
-Claude'dan kural incelemesi ister: bir betiğin ya da hook'un denetleyebileceği her kural için Claude betiği
-bekleyen fikir olarak önerir, kararı kullanıcı verir. Böylece denetim Claude'dan (her oturumda token) betiğe
-(token yok) geçer. STATUS.md bölüm bölüm düzenlenir, satır numarasıyla asla; bir düzenlemenin bıraktığı boş
-satırlar ve boş maddeler silinir.
+CLAUDE.md'deki her kural satırı bir kimlik alır (`<!-- R-001 -->`). CLAUDE.md'ye yeni ya da değişmiş kural gelince
+(ilk oluşturulduğunda da) Session Guard Claude'dan kural incelemesi ister: diğer kurallarla çakışma (güncelleme ya
+da birleştirme, kullanıcıyla birlikte karar) ve bir betiğin ya da hook'un denetleyebileceği her kural için betik
+önerisi (fikir olarak; fikir sınırına sayılmaz). Kararı kullanıcı verir; betik görevi ancak betiğin çalıştığı
+doğrulanınca biter ve o zaman kural CLAUDE.md'den çıkar. Böylece denetim Claude'dan (her oturumda token) betiğe
+(token yok) geçer. STATUS.md ve CLAUDE.md bölüm ve kimlikle düzenlenir, satır numarasıyla asla; bir düzenlemenin
+bıraktığı boş satırlar ve boş maddeler silinir.
 
 ## 13. Komutlar
 Kullanıcı: `start long mode`, `finish session`, `continue installation` (mesajın başında, ardından virgül ya da

@@ -24,6 +24,7 @@ as self-modification, measured with 1.4).
 7. Hand-offs in the cloud: each unfinished task's work is committed and pushed to its own side branch
    `sg/<task-id>`; a new session (started from the default branch) is told which side branches hold hand-offs and
    merges one with `sg handoff adopt <branch>`. The user merges finished side branches into the default branch.
+   Side branches `sg/<task-id>` hold the project's own unfinished work (its code), not Session Guard's files. Git never deletes a branch when it is merged (GitHub can, for a merged pull request, when the repository setting "Automatically delete head branches" is on), and a cloud session cannot delete branches at all (its GitHub proxy refuses deletions). Delete merged side branches by hand on GitHub.
 8. Update: run steps 1, 2 and 4 again (`$SG install cloud "$REPO"` replaces the copy), commit, push.
 9. Remove: `$SG install remove-project "$REPO"` (`--remove-store` also the task store), commit, push or pull
    request with the user's yes; the user deletes leftover `sg/*` branches on GitHub (the cloud cannot delete

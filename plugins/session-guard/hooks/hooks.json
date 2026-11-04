@@ -1,5 +1,5 @@
 {
-  "description": "Session Guard 2.0: context, breaks, quota, session locks, task ownership and hand-offs.",
+  "description": "Session Guard 2.0 hooks: context, breaks, quota, session locks, task ownership and hand-offs (SESSION-GUARD: 2.0 | component: plugin-hooks | version: 2.0.0)",
   "hooks": {
     "SessionStart": [
       {

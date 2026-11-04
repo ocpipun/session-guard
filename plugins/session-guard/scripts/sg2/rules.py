@@ -5,6 +5,7 @@ Threshold, break, long-mode, quota, archive and reply-style rules are v1.4's, un
 ownership, the generated STATUS block, per-task hand-offs and migration.
 """
 import os
+import re
 
 from . import core
 
@@ -39,6 +40,13 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
 - IDS: every project has a PROJECT-ID, every session a SESSION-ID (yours is given below and in $SG_SESSION_ID),
   every task a TASK-ID (TASK-001, subtasks TASK-001-1, TASK-001-2-1). Use `sg` (the command given below) for every
   task change; it checks ownership and writes under a lock, so parallel sessions never overwrite each other.
+- LIMITS (Session Guard guards session cost, not project planning): at most 3 normal + 1 urgent active main
+  tasks, 10 queued tasks (`sg task new --queue`, start with `sg task start <id>`) and 10 ideas (`sg idea add`,
+  temporary id IDEA-xxx, replaced by the task id when promoted); one prompt can bring at most 24 (3+1+10+10).
+  Subtasks and rule-script work do not count. Split a multi-step prompt into this form yourself. Over the limits:
+  refuse, tell the user to finish the waiting work first, and to plan in a separate project. Before adding a task
+  or idea, `sg` lists related existing work: check it for overlap, conflict or a bug the new work could cause and
+  warn the user; a near copy is refused (never redo an idea twice).
 - TASKS: work only on a task you own. Continuing a task keeps its id (claim it: `sg task claim <id>`). A task owned
   by another active session is not yours: ask the user. A new active main task needs the user's approval
   (`--approval "<their words>"`); at most 3 normal main tasks, plus 1 urgent with a reason and approval when 3 are
@@ -47,12 +55,15 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
   old one. A finished subtask never finishes its parent.
 - STATUS: the task block of docs/STATUS.md is generated from the task store: never edit it by hand. When a step
   ends run `sg task note`, when a task is finished `sg task done` at once, not at session end. Free text goes
-  under "## Notes" (STATUS.md stays at 50 lines or less; move old notes to STATUS_ARCHIVE.md). Work by section
-  (its heading or TASK-ID), never by line number: delete a line completely, leave no empty line or empty bullet
-  (Session Guard removes them). A rule lives only in CLAUDE.md, a task or state only in the task store / STATUS:
-  never the same line in both.
-- RULES TO SCRIPTS: when CLAUDE.md gets new rules Session Guard asks for a RULE REVIEW: propose a script or hook
-  for every rule one could enforce (as a backlog idea the user decides on), so checks move from you to scripts.
+  under "## Notes", and every bullet there becomes an idea with an id (STATUS.md stays at 50 lines or less).
+  Work by section (its heading, TASK-ID or IDEA-ID), never by line number: delete a line completely, leave no
+  empty line or empty bullet (Session Guard removes them). A rule lives only in CLAUDE.md, a task or state only in
+  the task store / STATUS: never the same line in both.
+- CLAUDE.md: every rule line carries an id ("<!-- R-001 -->"); change and remove rules by id and section, never by
+  line number. New or changed rules trigger a RULE REVIEW: conflicts with other rules (update or merge, decided
+  with the user), and a script or hook proposal (idea, `--source rule-review --rule R-xxx`) for every rule one
+  could enforce. A rule-script task is done only with `--verified "<how it was checked>"`; then Session Guard
+  removes its rule from CLAUDE.md. Until then the rule stays.
 - SESSION START: if several tasks can be taken over (hand-offs waiting, orphaned tasks), do not pick one: ask the
   user which. Read a hand-off with `sg task show <id>` before claiming it.
 - HAND-OFF: first bring each task you own to a hand-off-ready point (finish the small step in progress, leave
@@ -101,11 +112,21 @@ GENERAL_RULES = """# Session Guard 2.0 general rules (SESSION-GUARD: 2.0)
   quota saving."""
 
 
-def project_rule_lines(root):
-    """The rule lines of a project's CLAUDE.md (no headings, comments, code fences or Session Guard blocks)."""
-    p = core.exists_ci(root, "CLAUDE.md") if root else None
-    lines, inside, fence = [], False, False
-    for line in (core.read_text(p) or "").splitlines() if p else []:
+# Every rule line of a project's CLAUDE.md gets an id at its first review, written at the line's end as
+# "<!-- R-001 -->", so rules are found, changed and removed by id and section, never by line number.
+RULE_ID = re.compile(r"\s*<!--\s*(R-\d{3,})\s*-->\s*$")
+
+
+def claude_md(root):
+    return (core.exists_ci(root, "CLAUDE.md") if root else None) or (os.path.join(root, "CLAUDE.md") if root else None)
+
+
+def parse_rules(root):
+    """[(line index, rule id or None, rule text)] of the project's CLAUDE.md: no headings, comments, code fences or
+    Session Guard blocks."""
+    p = claude_md(root)
+    out, inside, fence = [], False, False
+    for i, line in enumerate((core.read_text(p) or "").splitlines() if p else []):
         s = line.strip()
         if s.startswith("```"):
             fence = not fence
@@ -115,24 +136,85 @@ def project_rule_lines(root):
         if inside:
             inside = not ("session-guard" in s and ":end" in s)
             continue
-        if fence or not s or s.startswith(("#", "<!--")) or s in lines:
+        if fence or not s or s.startswith(("#", "<!--")):
             continue
-        lines.append(s)
-    return lines
+        m = RULE_ID.search(line)
+        out.append((i, m.group(1) if m else None, RULE_ID.sub("", line).strip()))
+    return out
+
+
+def project_rule_lines(root):
+    return [text for _, _, text in parse_rules(root)]
 
 
 def new_rule_lines(root, data):
-    seen = set(((data or {}).get("rule_review") or {}).get("lines") or [])
-    return [l for l in project_rule_lines(root) if l not in seen]
+    """Rule lines not reviewed yet: no id, or text changed since its review ("R-003: text")."""
+    known = (data or {}).get("rules") or {}
+    out = []
+    for _, rid, text in parse_rules(root):
+        if rid is None:
+            out.append(text)
+        elif (known.get(rid) or {}).get("text") != text:
+            out.append("%s (changed): %s" % (rid, text))
+    return out
 
 
-RULE_REVIEW = ("[Session Guard 2.0] RULE REVIEW: CLAUDE.md has %d new or changed rule line(s):\n%s\nFor each: could a "
-               "script or hook check or do it instead of you (file checks, formats, limits, names, commands, git "
-               "steps)? Look at what the project already has. Propose each fitting one as a task proposal, not work: "
-               "`%s idea add \"Script instead of a rule: <rule> -> <what the script does>\" --source rule-review`, "
-               "and list them for the user in your reply, in one numbered list. A line that is state or a task, not a "
-               "rule, belongs in a task or STATUS: say so and, with the user's yes, move it. Then `%s rules reviewed`. "
-               "Do this once now, briefly, before or alongside the user's request.")
+def mark_reviewed(root, data, by):
+    """Gives every rule line without an id the next R-id (written into CLAUDE.md) and records the reviewed texts;
+    a reviewed id no longer in the file is recorded as removed."""
+    p = claude_md(root)
+    text = core.read_text(p) if p else None
+    if text is None:
+        return 0
+    lines = text.splitlines(keepends=True)
+    rules = data.setdefault("rules", {})
+    present = set()
+    for i, rid, body in parse_rules(root):
+        if rid is None:
+            n = data.get("next_rule") or 1
+            while "R-%03d" % n in rules:
+                n += 1
+            rid, data["next_rule"] = "R-%03d" % n, n + 1
+            end = "\r\n" if lines[i].endswith("\r\n") else "\n" if lines[i].endswith("\n") else ""
+            lines[i] = lines[i].rstrip("\r\n").rstrip() + " <!-- %s -->" % rid + end
+        present.add(rid)
+        rules[rid] = dict(rules.get(rid) or {}, text=body, state="active", reviewed=core.iso(), by=by)
+    for rid, r in rules.items():
+        if rid not in present and r.get("state") == "active":
+            r["state"] = "removed from CLAUDE.md"
+    new = "".join(lines)
+    if new != text:
+        core.write_text(p, new)
+    return len(present)
+
+
+def remove_rule(root, rid):
+    """Removes the line of rule rid from CLAUDE.md (after its script was verified, or on the user's yes)."""
+    from . import render
+    p = claude_md(root)
+    text = core.read_text(p) if p else None
+    if not text:
+        return False
+    lines = text.splitlines(keepends=True)
+    hit = [i for i, r, _ in parse_rules(root) if r == rid]
+    if not hit:
+        return False
+    del lines[hit[0]]
+    core.write_text(p, render.tidy("".join(lines)))
+    return True
+
+
+RULE_REVIEW = ("[Session Guard 2.0] RULE REVIEW: CLAUDE.md has %d new or changed rule line(s):\n%s\nDo this once now, "
+               "briefly, before or alongside the user's request:\n1. Conflicts: compare each with the other rules of "
+               "CLAUDE.md (each has an id, \"<!-- R-001 -->\"): a rule that contradicts or repeats another is updated "
+               "or merged with it; propose it, the user decides with you.\n2. Scripts: could a script or hook check "
+               "or do it instead of you (file names, formats, limits, line counts, commit messages, forbidden paths, "
+               "git steps)? Look at what the project already has. Each fitting one is a proposal, not work: `%s idea "
+               "add \"Script instead of a rule: <rule> -> <what the script does>\" --source rule-review --rule "
+               "<R-id when it has one>`. The rule stays in CLAUDE.md until that script's task is done and verified.\n"
+               "3. A line that is state or a task, not a rule, belongs in a task: say so; with the user's yes move "
+               "it.\nList 1-3 for the user in one numbered list, then `%s rules reviewed` (it gives new lines their "
+               "ids).")
 
 
 def global_md():

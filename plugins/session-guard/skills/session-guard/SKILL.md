@@ -38,17 +38,33 @@ Only on a Session Guard instruction or the user's request (250k is a notice only
 5. 300k (normal) or 800k (long mode) hand-off: also the SESSION MEASUREMENT the instruction gives, as in "Finish
    session" step 2 ("finish session" is refused after this hand-off).
 
-## Rule review (RULE REVIEW)
-When Session Guard lists new CLAUDE.md rule lines: for each, ask whether a script or hook could check or do it
-instead of you (deterministic: file names, formats, limits, line counts, commit messages, forbidden paths, git
-steps); look at what the project already has. Each candidate: `sg idea add "Script instead of a rule: <rule> ->
-<what the script does>" --source rule-review`, all in one numbered list for the user (proposals, no work). A line
-that is state or a task, not a rule: say so; with the user's yes move it to a task and out of CLAUDE.md. Then
-`sg rules reviewed`.
+## Limits and new work
+- At most 3 normal + 1 urgent active main tasks, 10 queued (`sg task new --title ... --queue --approval "..."`,
+  `sg task start <id>`), 10 ideas (`sg idea add "..."`, temporary IDEA-xxx; `sg idea promote <id> [--queue]` gives
+  it a task id). Subtasks and rule-script work are not counted. A multi-step prompt: split it into this form
+  (active, urgent, queued, ideas, subtasks) before working.
+- Over a limit: do not take the work; tell the user to finish the waiting work first and to plan in a separate
+  project (Session Guard guards session cost, not project planning).
+- `sg` lists related existing work for each new task or idea: check it for overlap, conflict or a bug the new work
+  could cause (finished and running tasks too) and warn the user in one line. A near copy is refused.
 
-## STATUS by section
-Edit docs/STATUS.md by section (its heading or TASK-ID), never by line number; delete a line completely. Session
-Guard removes empty lines and empty bullets an edit leaves behind.
+## Rule review (RULE REVIEW)
+When Session Guard lists new or changed CLAUDE.md rule lines:
+1. Conflicts: compare with the other rules (each has an id `<!-- R-001 -->`); a contradicting or repeating rule is
+   updated or merged, decided with the user.
+2. Scripts: could a script or hook check or do it instead of you (file names, formats, limits, line counts, commit
+   messages, forbidden paths, git steps)? Look at what the project already has. Each candidate: `sg idea add
+   "Script instead of a rule: <rule> -> <what the script does>" --source rule-review --rule R-xxx` (not counted
+   in the idea limit). Proposals only, in one numbered list for the user.
+3. A line that is state or a task, not a rule: say so; with the user's yes move it to a task and out of CLAUDE.md.
+Then `sg rules reviewed` (new lines get their ids). A promoted rule-script idea becomes a rule-script task; when
+the script works, `sg task done <id> --verified "<how you checked it>"` removes the rule from CLAUDE.md. Remove a
+rule otherwise only with the user's yes: `sg rules remove R-xxx --approval "<their words>"`.
+
+## STATUS and CLAUDE.md by section
+Edit both by section and id (heading, TASK-ID, IDEA-ID, R-ID), never by line number; delete a line completely.
+Session Guard removes empty lines and empty bullets an edit leaves behind. A bullet under STATUS "## Notes" becomes
+an idea with an id.
 
 ## Taking over
 `sg task show <id>` first: the "Work:" line says where the work is. A task on a side branch this checkout lacks

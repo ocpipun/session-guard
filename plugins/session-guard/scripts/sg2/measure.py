@@ -228,7 +228,8 @@ def save_reading(name, percent, resets, source):
         return
     if resets > 1e11:
         resets /= 1000.0
-    core.write_json(follow_path(name), {"used_percent": float(percent), "resets_at": float(resets),
+    core.write_json(follow_path(name), {"signature": "SESSION-GUARD: 2.0", "used_percent": float(percent),
+                                        "resets_at": float(resets),
                                         "read_at": time.time(), "source": source})
 
 

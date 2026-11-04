@@ -1,6 +1,6 @@
 {
   "name": "session-guard",
-  "description": "Session Guard 2.0: context, break and quota guard, session locks, task ids and ownership, hand-offs that keep unfinished work, for Claude Code.",
+  "description": "Session Guard 2.0: context, break and quota guard, session locks, task ids and ownership, hand-offs that keep unfinished work, for Claude Code. (SESSION-GUARD: 2.0)",
   "owner": {
     "name": "ocpipun"
   },

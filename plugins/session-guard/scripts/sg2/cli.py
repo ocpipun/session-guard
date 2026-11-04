@@ -69,10 +69,19 @@ def cmd_task(a):
     sid = session_of(a)
     exp = a.expect_rev
     if a.action == "new":
-        t = store.mutate(root, lambda d: store.new_task(d, sid, a.title, kind=a.kind, priority=a.priority,
-                                                         parent=a.parent, approval=a.approval, reason=a.reason),
-                         expect_rev=exp)
-        out("created %s (%s) owner %s" % (t["id"], t["title"], sid))
+        found = []
+
+        def change(d):
+            found[:] = store.similar(d, a.title) if not a.parent else []
+            return store.new_task(d, sid, a.title, kind=a.kind, priority=a.priority, parent=a.parent,
+                                  approval=a.approval, reason=a.reason, queue=a.queue, rule=a.rule)
+        t = store.mutate(root, change, expect_rev=exp)
+        out("created %s (%s) %s" % (t["id"], t["title"], "queued" if a.queue else "owner " + sid))
+        if found:
+            out(store.related_text(found))
+    elif a.action == "start":
+        store.mutate(root, lambda d: store.start(d, sid, a.id), expect_rev=exp)
+        out("%s started (owner %s)" % (a.id, sid))
     elif a.action == "claim":
         how = store.mutate(root, lambda d: store.claim(d, sid, a.id, a.takeover), expect_rev=exp)
         out("%s: %s" % (a.id, how))
@@ -83,7 +92,8 @@ def cmd_task(a):
         out("%s updated" % a.id)
     elif a.action in ("done", "cancel"):
         r = store.mutate(root, lambda d: store.close(d, sid, a.id, "done" if a.action == "done" else "cancelled",
-                                                      summary=a.summary, force=a.force), expect_rev=exp)
+                                                      summary=a.summary, force=a.force, verified=a.verified),
+                         expect_rev=exp)
         out("%s %s" % (a.id, r if isinstance(r, str) else r["status"]))
     elif a.action == "reopen":
         t = store.mutate(root, lambda d: store.reopen(d, sid, a.id, a.title, a.relation, a.approval), expect_rev=exp)
@@ -98,11 +108,18 @@ def cmd_idea(a):
     root = root_of(a)
     sid = session_of(a)
     if a.action == "add":
-        iid = store.mutate(root, lambda d: store.add_idea(d, sid, a.text, source=a.source))
-        out("backlog: %s" % iid)
+        found = []
+
+        def change(d):
+            found[:] = store.similar(d, a.text)
+            return store.add_idea(d, sid, a.text, source=a.source, rule=a.rule, force=a.force)
+        iid = store.mutate(root, change)
+        out("idea %s (temporary id; the task id replaces it when it becomes a task)" % iid)
+        if found:
+            out(store.related_text(found))
     else:
-        t = store.mutate(root, lambda d: store.promote_idea(d, sid, a.id, a.approval))
-        out("%s → %s" % (a.id, t["id"]))
+        t = store.mutate(root, lambda d: store.promote_idea(d, sid, a.id, a.approval, queue=a.queue))
+        out("%s → %s (%s)" % (a.id, t["id"], t["status"]))
     return 0
 
 
@@ -218,12 +235,21 @@ def cmd_rules(a):
         out("\n".join(new) if new else "no new rule lines")
         return 0
     sid = session_of(a)
-    lines = rules.project_rule_lines(root)
+    if a.action == "remove":
+        if not (a.id and rules.RULE_ID.search("<!-- %s -->" % a.id)):
+            raise store.Refused("give a rule id (R-001)")
+        if not (a.approval or "").strip():
+            raise store.Refused("removing a rule needs the user's yes: --approval \"<the user's words>\"")
 
-    def change(d):
-        d["rule_review"] = {"lines": lines, "at": core.iso(), "by": sid}
-    store.mutate(root, change, render=False)
-    out("reviewed: %d rule lines" % len(lines))
+        def drop(d):
+            r = (d.get("rules") or {}).get(a.id)
+            if r:
+                r.update(state="removed", removed_by="user: " + a.approval.strip())
+            return rules.remove_rule(root, a.id)
+        out("%s %s" % (a.id, "removed from CLAUDE.md" if store.mutate(root, drop, render=False) else "not found"))
+        return 0
+    n = store.mutate(root, lambda d: rules.mark_reviewed(root, d, sid), render=False)
+    out("reviewed: %d rule lines (ids written into CLAUDE.md)" % n)
     return 0
 
 
@@ -347,7 +373,8 @@ def cmd_install(a):
         if os.path.basename(os.path.abspath(a.executive)).lower() != "session-guard-executive":
             raise store.Refused("the control project must be a folder named session-guard-executive")
         res = rules.ensure_global_block()
-        cfg.update(installed=True, rules=rules.RULES_VERSION, version=SG_VERSION, date=core.today(),
+        cfg.update(signature="SESSION-GUARD: 2.0", installed=True, rules=rules.RULES_VERSION, version=SG_VERSION,
+                   date=core.today(),
                    executive=os.path.abspath(a.executive))
         core.save_config(cfg)
         out("installed: config %s; global block %s; 1.x block %s; status line: %s" % (
@@ -435,7 +462,11 @@ def parser():
     common.add_argument("--expect-rev", type=int)
 
     t = sub.add_parser("task", parents=[common])
-    t.add_argument("action", choices=["list", "show", "new", "claim", "note", "done", "cancel", "reopen", "relate"])
+    t.add_argument("action", choices=["list", "show", "new", "start", "claim", "note", "done", "cancel", "reopen",
+                                      "relate"])
+    t.add_argument("--queue", action="store_true")
+    t.add_argument("--rule")
+    t.add_argument("--verified")
     t.add_argument("id", nargs="?")
     t.add_argument("--title")
     t.add_argument("--kind", default="normal")
@@ -460,9 +491,14 @@ def parser():
     i.add_argument("text_or_id")
     i.add_argument("--approval")
     i.add_argument("--source")
+    i.add_argument("--rule")
+    i.add_argument("--force")
+    i.add_argument("--queue", action="store_true")
 
     u = sub.add_parser("rules", parents=[common])
-    u.add_argument("action", choices=["check", "reviewed"])
+    u.add_argument("action", choices=["check", "reviewed", "remove"])
+    u.add_argument("id", nargs="?")
+    u.add_argument("--approval")
 
     h = sub.add_parser("handoff", parents=[common])
     h.add_argument("action", choices=["write", "publish", "adopt"])
@@ -512,7 +548,7 @@ def run(argv):
         a.text, a.id = a.text_or_id, a.text_or_id
     try:
         if a.cmd == "task":
-            if a.action in ("show", "claim", "note", "done", "cancel", "reopen", "relate") and not \
+            if a.action in ("show", "start", "claim", "note", "done", "cancel", "reopen", "relate") and not \
                     (a.id and core.TASK_ID.match(a.id)):
                 raise store.Refused("give a TASK-ID")
             return cmd_task(a)
