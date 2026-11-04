@@ -47,7 +47,12 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
   old one. A finished subtask never finishes its parent.
 - STATUS: the task block of docs/STATUS.md is generated from the task store: never edit it by hand. When a step
   ends run `sg task note`, when a task is finished `sg task done` at once, not at session end. Free text goes
-  under "## Notes" (STATUS.md stays at 50 lines or less; move old notes to STATUS_ARCHIVE.md).
+  under "## Notes" (STATUS.md stays at 50 lines or less; move old notes to STATUS_ARCHIVE.md). Work by section
+  (its heading or TASK-ID), never by line number: delete a line completely, leave no empty line or empty bullet
+  (Session Guard removes them). A rule lives only in CLAUDE.md, a task or state only in the task store / STATUS:
+  never the same line in both.
+- RULES TO SCRIPTS: when CLAUDE.md gets new rules Session Guard asks for a RULE REVIEW: propose a script or hook
+  for every rule one could enforce (as a backlog idea the user decides on), so checks move from you to scripts.
 - SESSION START: if several tasks can be taken over (hand-offs waiting, orphaned tasks), do not pick one: ask the
   user which. Read a hand-off with `sg task show <id>` before claiming it.
 - HAND-OFF: first bring each task you own to a hand-off-ready point (finish the small step in progress, leave
@@ -96,6 +101,40 @@ GENERAL_RULES = """# Session Guard 2.0 general rules (SESSION-GUARD: 2.0)
   quota saving."""
 
 
+def project_rule_lines(root):
+    """The rule lines of a project's CLAUDE.md (no headings, comments, code fences or Session Guard blocks)."""
+    p = core.exists_ci(root, "CLAUDE.md") if root else None
+    lines, inside, fence = [], False, False
+    for line in (core.read_text(p) or "").splitlines() if p else []:
+        s = line.strip()
+        if s.startswith("```"):
+            fence = not fence
+            continue
+        if "session-guard" in s and ":begin" in s:
+            inside = True
+        if inside:
+            inside = not ("session-guard" in s and ":end" in s)
+            continue
+        if fence or not s or s.startswith(("#", "<!--")) or s in lines:
+            continue
+        lines.append(s)
+    return lines
+
+
+def new_rule_lines(root, data):
+    seen = set(((data or {}).get("rule_review") or {}).get("lines") or [])
+    return [l for l in project_rule_lines(root) if l not in seen]
+
+
+RULE_REVIEW = ("[Session Guard 2.0] RULE REVIEW: CLAUDE.md has %d new or changed rule line(s):\n%s\nFor each: could a "
+               "script or hook check or do it instead of you (file checks, formats, limits, names, commands, git "
+               "steps)? Look at what the project already has. Propose each fitting one as a task proposal, not work: "
+               "`%s idea add \"Script instead of a rule: <rule> -> <what the script does>\" --source rule-review`, "
+               "and list them for the user in your reply, in one numbered list. A line that is state or a task, not a "
+               "rule, belongs in a task or STATUS: say so and, with the user's yes, move it. Then `%s rules reviewed`. "
+               "Do this once now, briefly, before or alongside the user's request.")
+
+
 def global_md():
     return os.path.join(core.claude_dir(), "CLAUDE.md")
 
@@ -125,14 +164,15 @@ def ensure_global_block():
     return result
 
 
-def remove_v1_block():
-    """Removes the 1.x block, only once the 2.0 block is in place. 'removed', 'none', 'kept' or 'broken'."""
+def remove_v1_block(force=False):
+    """Removes the 1.x block, only once the 2.0 block is in place (force: on uninstall). 'removed', 'none', 'kept'
+    or 'broken'."""
     from . import legacy
     p = global_md()
     text = core.read_text(p) or ""
     if legacy.V1_BLOCK not in text:
         return "none"
-    if BLOCK_BEGIN.split(" (")[0] not in text:
+    if BLOCK_BEGIN.split(" (")[0] not in text and not force:
         return "kept"  # never leave the computer without any rules block
     a, b = text.find(legacy.V1_BLOCK), text.find(legacy.V1_BLOCK_END)
     if text.count(legacy.V1_BLOCK) != 1 or b < a:

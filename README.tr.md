@@ -129,14 +129,36 @@ bulut oturumlarını engelleyen küçük bir hook bulunur. Bulut projesi Session
 - **Bütçe:** bir kurulum oturumu yaklaşık 800k token kullanabilir; %90'da güvenli bir noktada durur, kullanıcı
   yeni oturumda `continue installation` ile devam eder.
 - Bildirimler kullanıcının dilinde gösterilebilir (`sg install language`).
-- Kaldırma: `sg install uninstall`, sonra `claude plugin uninstall session-guard@session-guard`; proje dosyaları kalır.
+- Eski görev listeleri adına bakılmadan içeriğinden bulunur (onay kutuları, "Yapılacak / Bekleyen / Biten"
+  başlıkları): açık maddeleri görev ya da fikir, bitenleri `COMPLETED_TASKS.md` satırı olur; eski dosyalar
+  kullanıcının onayıyla kaldırılır (kopyası saklanır). CLAUDE.md'de bir durum ya da görev satırını tekrar eden
+  satırlar listelenir; durum CLAUDE.md'den çıkar, böylece bir kural ile bir görev birbirinin kopyası olmaz.
 
-## 11. Komutlar
+## 11. Kaldırma
+Her adım kullanıcının onayıyla ([setup skill'i](plugins/session-guard/skills/setup/SKILL.md), "Uninstall").
+- **Bilgisayar** (`session-guard-executive`'den): önce her projenin açık görevleri ve devirleri gösterilir. Proje
+  başına `sg install remove-project`: STATUS.md'nin son görev listesi düz metin olarak, arşiv, bekleyen fikirler ve
+  biten görevler listesi kalır; Session Guard'ın hook'ları, kopyası, skill kopyaları ve kurulum işareti kaldırılır
+  (`--remove-store` görev kaydını da siler). Sonra `sg install uninstall` (kural bölümü, durum çubuğu;
+  `--purge-state` makinedeki durum klasörünü de siler) ve `claude plugin uninstall session-guard@session-guard`,
+  ardından Claude tamamen kapatılıp açılır.
+- **Bulut deposu:** deponun bir oturumunda `sg install remove-project`, commit, push ya da pull request. Bulut dal
+  silemez; kalan `sg/*` dallarını kullanıcı GitHub'da siler; eski bulut oturumları claude.ai/code'da arşivlenir.
+
+## 12. Kurallar betiğe dönüşür
+Projenin CLAUDE.md dosyasına yeni ya da değişmiş bir kural satırı geldiğinde (ilk oluşturulduğunda da) Session Guard
+Claude'dan kural incelemesi ister: bir betiğin ya da hook'un denetleyebileceği her kural için Claude betiği
+bekleyen fikir olarak önerir, kararı kullanıcı verir. Böylece denetim Claude'dan (her oturumda token) betiğe
+(token yok) geçer. STATUS.md bölüm bölüm düzenlenir, satır numarasıyla asla; bir düzenlemenin bıraktığı boş
+satırlar ve boş maddeler silinir.
+
+## 13. Komutlar
 Kullanıcı: `start long mode`, `finish session`, `continue installation` (mesajın başında, ardından virgül ya da
-nokta; ya da sonunda). Claude `sg task …`, `sg idea …`, `sg handoff write|publish|adopt`, `sg migrate …`,
-`sg install …`, `sg manifest verify` ve `sg report` komutlarını kendisi kullanır.
+nokta; ya da sonunda). Claude `sg task …`, `sg idea …`, `sg rules check|reviewed`,
+`sg handoff write|publish|adopt`, `sg migrate …`, `sg install …`, `sg manifest verify` ve `sg report` komutlarını
+kendisi kullanır.
 
-## 12. Sınırlar
+## 14. Sınırlar
 - Session Guard'ın okuduğu oturum kaydı biçimi Anthropic tarafından belgelenmemiştir, değişebilir.
 - Eski bulut oturumları bilgisayardan kilitlenemez; onları claude.ai/code'da arşivleyin.
 - Git kullanmayan projelerde git geri dönüşü yoktur; yalnız dosya kopyaları tutulur.
@@ -145,7 +167,7 @@ nokta; ya da sonunda). Claude `sg task …`, `sg idea …`, `sg handoff write|pu
   açılan oturum o devri `sg handoff adopt` ile görür.
 - Doğrulanamayanlar: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §8.
 
-## 13. Testler
+## 15. Testler
 ```bash
 python -m unittest discover -s tests
 ```

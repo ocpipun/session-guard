@@ -17,7 +17,7 @@ sys.path.insert(0, HERE)
 
 from sg2 import cli, core, hooks, place  # noqa: E402
 
-COMMANDS = ("task", "idea", "handoff", "migrate", "install", "manifest", "report", "-h", "--help")
+COMMANDS = ("task", "idea", "rules", "handoff", "migrate", "install", "manifest", "report", "-h", "--help")
 
 
 def main():

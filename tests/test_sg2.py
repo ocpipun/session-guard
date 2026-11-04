@@ -594,6 +594,115 @@ class Work(Base):
         self.assertEqual(m["sessions"][S1]["state"], "locked")
 
 
+class Cleanup(Base):
+    """STATUS by section, rules reviewed for scripts, old task files moved and retired, uninstall."""
+
+    def test_status_edit_leaves_no_empty_lines(self):
+        root = self.migrated()
+        p = os.path.join(root, "docs", "STATUS.md")
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write("\n\n\n- kept note   \n-\n- \n\n\n- second note\n\n\n")
+        out = self.hook("PostToolUse", "st", tool_name="Edit", tool_input={"file_path": p}, cwd=root)
+        self.hook("SessionStart", "st", cwd=root)
+        out = self.hook("PostToolUse", "st", tool_name="Edit", tool_input={"file_path": p}, cwd=root)
+        text = self.text(p)
+        self.assertNotIn("\n\n\n", text)
+        self.assertNotRegex(text, r"(?m)^-\s*$")
+        self.assertIn("- kept note\n- second note\n", text)
+        self.assertNotIn("kept note   ", text)
+
+    def test_rule_review_on_new_claude_md_rules(self):
+        root = self.migrated(files={"CLAUDE.md": "# Rules\n- Answer in Turkish, short sentences.\n"})
+        out, sid = self.start("rv", root)
+        self.assertNotIn("RULE REVIEW: CLAUDE.md", self.ctx(out))          # reviewed at migration
+        cm = os.path.join(root, "CLAUDE.md")
+        with open(cm, "a", encoding="utf-8") as fh:
+            fh.write("- Every commit message starts with the TASK-ID.\n")
+        out = self.hook("PostToolUse", "rv", tool_name="Edit", tool_input={"file_path": cm}, cwd=root)
+        self.assertIn("RULE REVIEW: CLAUDE.md has 1 new", self.ctx(out))
+        self.assertIn("Every commit message starts with the TASK-ID.", self.ctx(out))
+        self.assertIn("starts with the TASK-ID", self.sg("rules", "check", "--root", root))
+        self.sg("idea", "add", "Script instead of a rule: commit-msg hook", "--source", "rule-review", "--session", sid,
+                "--root", root, ok=True)
+        self.sg("rules", "reviewed", "--session", sid, "--root", root, ok=True)
+        out, _ = self.start("rv2", root)
+        self.assertNotIn("RULE REVIEW: CLAUDE.md", self.ctx(out))
+        self.assertIn("commit-msg hook", self.text(root, "docs", "TASK_BACKLOG.md"))
+
+    def test_task_files_found_by_content_moved_and_retired(self):
+        bare = os.path.join(self.home, "tl.git")
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True)
+        root = self.project("tl", git=True, files={
+            "misc/list.md": "Things\n- [ ] fix login page\n- [x] set up the database\n",
+            "CLAUDE.md": "# Rules\n- Short answers.\n- Deploy the login fix before the Friday release\n",
+            "docs/STATUS.md": "# S\n- Deploy the login fix before the Friday release.\n"})
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "files")
+        self.git(root, "remote", "add", "origin", bare)
+        self.git(root, "push", "-q", "origin", "main")
+        self.sg("migrate", "discover", "--add", root, ok=True)
+        self.sg("migrate", "survey", root, ok=True)
+        survey = json.load(open(glob_one(os.path.join(self.home, ".claude", "session_guard_v2", "migration",
+                                                      "*.survey.json")), encoding="utf-8"))
+        found = {f["path"]: f for f in survey["task_list_files"]}
+        self.assertEqual((found["misc/list.md"]["open_items"], found["misc/list.md"]["done_items"]), (1, 1))
+        self.assertEqual(survey["duplicates"][0]["rule_line"], "- Deploy the login fix before the Friday release")
+        plan = os.path.join(self.home, "tl-plan.json")
+        json.dump({"name": "tl", "tasks": [{"title": "fix login page"}], "completed": ["set up the database"],
+                   "retire": ["misc/list.md"], "claude_md_remove": ["- Deploy the login fix before the Friday release"],
+                   "rule_scripts": ["short answers: a reply-length check"]}, open(plan, "w"))
+        self.assertIn("cannot retire", self.sg("migrate", "apply", root, "--plan", self.bad_plan(), "--session", S3,
+                                               ok=False))
+        self.sg("migrate", "apply", root, "--plan", plan, "--session", S3, ok=True)
+        self.assertFalse(os.path.exists(os.path.join(root, "misc", "list.md")))
+        self.assertNotIn("Friday", self.text(root, "CLAUDE.md"))
+        self.assertIn("- Short answers.", self.text(root, "CLAUDE.md"))
+        self.assertIn("set up the database", self.text(root, "docs", "COMPLETED_TASKS.md"))
+        self.assertIn("Script instead of a rule: short answers", self.text(root, "docs", "TASK_BACKLOG.md"))
+        self.assertIn("Retired (content moved", self.text(root, "docs", "STATUS_ARCHIVE.md"))
+        backups = os.path.join(self.home, ".claude", "session_guard_v2", "backups")
+        self.assertTrue(any("retired__misc__list.md" in fs for _, _, fs in os.walk(backups)))
+        self.sg("migrate", "verify", root, ok=True)
+        self.sg("migrate", "push", root, "--approval", "yes", ok=True)
+        self.assertEqual(self.git(bare, "ls-tree", "-r", "--name-only", "main", "misc"), "")  # deletion pushed
+
+    def bad_plan(self):
+        p = os.path.join(self.home, "bad-plan.json")
+        json.dump({"name": "x", "tasks": [], "retire": ["../outside.md"]}, open(p, "w"))
+        return p
+
+    def test_remove_from_a_cloud_repository_and_a_computer(self):
+        root = self.project("rm", git=True)
+        self.sg("migrate", "discover", "--add", root, ok=True)
+        self.sg("migrate", "survey", root, ok=True)
+        plan = os.path.join(self.home, "rm-plan.json")
+        json.dump({"name": "rm", "home": "cloud", "tasks": [{"title": "A"}]}, open(plan, "w"))
+        self.sg("migrate", "apply", root, "--plan", plan, "--session", S3, ok=True)
+        self.sg("install", "cloud", root, ok=True)
+        out = self.sg("install", "remove-project", root, ok=True)
+        self.assertIn("7 Session Guard hook(s) removed", out)
+        self.assertNotIn("session-guard2", self.text(root, ".claude", "settings.json"))
+        self.assertFalse(os.path.exists(os.path.join(root, ".claude", "session-guard2", "bin")))
+        self.assertFalse(os.path.exists(os.path.join(root, ".claude", "skills", "session-guard")))
+        status = self.text(root, "docs", "STATUS.md")
+        self.assertNotIn("sg-status:begin", status)
+        self.assertIn("TASK-002 · A", status)                      # the last task list stays readable
+        self.assertTrue(os.path.exists(os.path.join(root, ".claude", "session-guard2", "store.json")))
+        self.sg("install", "remove-project", root, "--remove-store", ok=True)
+        self.assertFalse(os.path.exists(os.path.join(root, ".claude", "session-guard2")))
+        out = self.sg("install", "uninstall", "--purge-state", ok=True)
+        self.assertIn("removed", out)
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".claude", "session_guard_v2")))
+        self.assertNotIn("session-guard2:begin", self.text(self.home, ".claude", "CLAUDE.md"))
+
+
+def glob_one(pattern):
+    import glob
+    found = glob.glob(pattern)
+    assert len(found) == 1, found
+    return found[0]
+
+
 class Migration(Base):
     def test_git_project_rollback_push_verified_and_unrelated_changes_untouched(self):
         bare = os.path.join(self.home, "remote.git")

@@ -19,4 +19,5 @@ conversation; pushes need their own yes.
 5. Last message, in the user's language: fully quit Claude (tray included) and reopen it. If the token budget
    paused the installation, a new session of `session-guard-executive` continues it with "continue installation".
 
-Uninstall: skill `setup`, "Uninstall".
+Uninstall: skill `setup`, "Uninstall" (open tasks shown first; per project `sg install remove-project`; then
+`sg install uninstall`, `claude plugin uninstall session-guard@session-guard`, full restart).

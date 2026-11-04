@@ -145,6 +145,23 @@ Risks:
 Install: in `session-guard-executive`, `sg manifest verify`, `sg install conflicts`, one approval, `sg install
 approve --executive <folder>`, notices, migration, then `claude plugin marketplace update session-guard` +
 `claude plugin update session-guard@session-guard`, full restart.
-Uninstall: `sg install uninstall` (removes the 2.0 global block), `claude plugin uninstall
-session-guard@session-guard`. Project stores and docs stay; remove `.claude/session-guard2/` by hand if wanted.
+Uninstall (user decision 2026-11-04, skill setup "Uninstall"): first the open tasks and hand-offs of every
+project are shown; per project `sg install remove-project` (STATUS block kept as plain text, archive / backlog /
+completed kept; computer guard and copy hooks, the copy, skills copies, setup marker removed; `--remove-store` also
+the task store); then `sg install uninstall` (2.0 and 1.x global blocks, status line; `--purge-state` the machine
+state) and `claude plugin uninstall session-guard@session-guard`. Cloud repositories: remove-project, commit,
+push or pull request; `sg/*` branches are deleted by the user on GitHub (the cloud proxy refuses deletions).
+
+## 10. Migration of old task files, rules and STATUS hygiene (user decision 2026-11-04)
+- The survey finds task lists by content (checkboxes, task headings in any file name, depth 3) and CLAUDE.md lines
+  that repeat a status or task line (`duplicates`, similarity 0.85). The plan moves every item (tasks, ideas,
+  completed lines), names files to retire (removed after apply, copy in the backup folder, the deletion committed
+  with the migration push) and CLAUDE.md lines that are state (removed, copy kept). A rule lives only in CLAUDE.md,
+  a task or state only in Session Guard's files.
+- Rule review: the store keeps the reviewed CLAUDE.md rule lines (`rule_review`, set at migration from the plan's
+  `rule_scripts`). New or changed lines trigger one RULE REVIEW request (session start, or right after an edit of
+  CLAUDE.md): Claude proposes a script or hook per enforceable rule as a backlog idea, then `sg rules reviewed`.
+- STATUS hygiene: text outside the generated block is tidied on every render and after every edit of STATUS.md
+  (empty bullets, runs of empty lines and gaps inside a list removed, trailing spaces cut): an agent that deletes
+  lines by number to keep the other numbers leaves exactly these. STATUS is edited by section.
 Rollback of a migrated git project: `git reset --hard sg2-pre-migration-<date>` after saving later work.

@@ -127,6 +127,33 @@ def block_intact(root):
     return _sha(body) == m.group(1)
 
 
+EMPTY_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s*$")
+ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+
+
+def tidy(text):
+    """Text outside the generated block: trailing spaces cut, empty bullets dropped, runs of empty lines made one.
+    An agent that deleted lines by number (to keep the other line numbers) leaves exactly these behind; STATUS is
+    edited by section (its heading), never by line number."""
+    out, blank = [], True
+    for line in text.splitlines():
+        line = line.rstrip()
+        if EMPTY_ITEM.match(line):
+            continue
+        if not line:
+            if blank:
+                continue
+            blank = True
+        else:
+            blank = False
+        out.append(line)
+    while out and not out[-1]:
+        out.pop()
+    out = [l for i, l in enumerate(out) if l or not (0 < i < len(out) - 1 and ITEM.match(out[i - 1])
+                                                     and ITEM.match(out[i + 1]))]  # a gap inside a list
+    return "\n".join(out) + "\n" if out else ""
+
+
 def render_status(root, data):
     path = doc(root, "STATUS.md")
     text = core.read_text(path)
@@ -138,6 +165,8 @@ def render_status(root, data):
             first, _, rest = text.partition("\n")
             before, after = (first + "\n\n", "\n" + rest.lstrip("\n")) if first.startswith("# ") else \
                 (STATUS_HEAD % data["name"], "\n" + text)
+    before = tidy(before) + "\n" if before.strip() else STATUS_HEAD % data["name"]
+    after = "\n\n" + tidy(after) if after.strip() else "\n"
     outside = len(before.splitlines()) + len(after.splitlines())
     new = before + compose_block(data, outside) + after
     if not new.endswith("\n"):

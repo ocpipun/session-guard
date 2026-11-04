@@ -173,6 +173,20 @@ def side_branch_lines(root, data):
                                      "otherwise ask.")]
 
 
+def rule_review(root, data, rec):
+    """New or changed CLAUDE.md rule lines (compared with the reviewed list in the store): one review request per
+    change and session."""
+    new = rules.new_rule_lines(root, data)
+    if not new:
+        return None
+    mark = "rules:%d:%s" % (len(new), new[-1][:40])
+    if mark in rec["notified"]:
+        return None
+    rec["notified"].append(mark)
+    shown = "\n".join("  - " + l for l in new[:15]) + ("\n  (+%d more)" % (len(new) - 15) if len(new) > 15 else "")
+    return rules.RULE_REVIEW % (len(new), shown, sg_cmd(), sg_cmd())
+
+
 def start_context(root, rec, data, source):
     parts = [rules.RULES]
     if PROJECT_MODE:
@@ -188,6 +202,9 @@ def start_context(root, rec, data, source):
     if data:
         head += " · PROJECT-ID %s (%s)" % (data["project_id"], root)
         parts.append("\n".join([head] + task_lines(data, rec["sg_id"]) + side_branch_lines(root, data)))
+        review = rule_review(root, data, rec)
+        if review:
+            parts.append(review)
         status = core.exists_ci(root, "docs/STATUS.md")
         if status:
             parts.append("docs/STATUS.md (already loaded, do not read again):\n\n" + (core.read_text(status) or "")[:8000])
@@ -463,6 +480,21 @@ def restore_status(root):
             "store. Change tasks only with `sg task ...`; free text goes under \"## Notes\".")
 
 
+def tidy_status(root):
+    """Empty lines and empty bullets an edit left in STATUS.md are removed (the generated block is untouched)."""
+    path = render.doc(root, "STATUS.md")
+    before = core.read_text(path)
+    try:
+        with core.FileLock(store.lock_path(root)):
+            render.render_status(root, store.load(root))
+    except core.Busy:
+        return None
+    if core.read_text(path) == before:
+        return None
+    return ("[Session Guard 2.0] docs/STATUS.md: empty lines or empty bullets left by an edit were removed. Edit "
+            "STATUS by section (its heading), never by line number.")
+
+
 def budget_notes(cid, reading, rec):
     mig = migrate.load()
     if cid not in mig["sessions"] or mig["phase"] != "running":
@@ -528,9 +560,13 @@ def on_tool(inp):
     if subagent(inp):
         return 0
     extra = []
-    if inp.get("tool_name") in EDIT_TOOLS and os.path.basename(tool_path(inp)).lower() == "status.md" and root \
-            and store.is_project(root):
-        r = restore_status(root)
+    edited = os.path.abspath(tool_path(inp)) if inp.get("tool_name") in EDIT_TOOLS and tool_path(inp) else ""
+    if edited and os.path.basename(edited).lower() == "status.md" and root and store.is_project(root):
+        r = restore_status(root) or tidy_status(root)
+        if r:
+            extra.append(r)
+    if edited and root and core.key(edited) == core.key(os.path.join(root, "CLAUDE.md")) and store.is_project(root):
+        r = rule_review(root, store.load(root), rec)
         if r:
             extra.append(r)
     turn = "turn24:%s" % reading.prompt_at

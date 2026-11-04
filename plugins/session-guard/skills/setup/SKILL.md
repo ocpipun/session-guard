@@ -23,13 +23,18 @@ explicit yes in this conversation; every push needs its own yes.
 1. `sg migrate discover` (`--add <folder>` for projects found elsewhere); `sg migrate status` shows the list.
 2. Per project: `sg migrate survey "<folder>"`. Give a subagent the survey JSON and have it read the files it
    names (STATUS and hand-off files, task lists, README, CLAUDE.md, AGENTS.md, GEMINI.md, skills, hooks, scripts,
-   recent commits) by content, not by name. If an old session of that project still runs and is reachable, ask it
-   for its hand-off instead. The report: current goal, finished work, open work, contradictions, unknowns. Do not
-   rebuild old sessions' hand-offs one by one.
-3. Write the plan JSON (`sg migrate plan-help`): at most 3 active tasks, the rest as ideas; contradictions and
-   unknowns listed, never settled by guessing. Show it to the user; on their yes `sg migrate apply "<folder>"
-   --plan <file>` (git: rollback tag; always: file copies; a project without git has NO git rollback: say so),
-   then `sg migrate verify "<folder>"`.
+   recent commits) by content, not by name. `task_list_files` are files that list tasks whatever their name
+   (checkboxes, "To do / Pending / Done" headings): check the state of every item. `duplicates` are CLAUDE.md
+   lines that repeat a status or task line. If an old session of that project still runs and is reachable, ask it
+   for its hand-off instead. The report: current goal, finished work, open work, contradictions, unknowns, and
+   which CLAUDE.md rules a script or hook could check. Do not rebuild old sessions' hand-offs one by one.
+3. Write the plan JSON (`sg migrate plan-help`): at most 3 active tasks, the rest as ideas, finished items as
+   "completed"; old task files whose content moved into the plan in "retire" (removed, a copy kept); CLAUDE.md
+   lines that are state or tasks, not rules, in "claude_md_remove" (a rule lives only in CLAUDE.md, a task only in
+   Session Guard's files); script candidates in "rule_scripts" (backlog ideas). Contradictions and unknowns
+   listed, never settled by guessing. Show the user the plan, every file to retire and every CLAUDE.md line to
+   remove by name; on their yes `sg migrate apply "<folder>" --plan <file>` (git: rollback tag; always: file
+   copies; a project without git has NO git rollback: say so), then `sg migrate verify "<folder>"`.
 4. Git projects, on the user's yes: `sg migrate push "<folder>" --approval "<their words>"`. Only Session Guard's
    paths are committed; "NOT VERIFIED" means not done.
 5. Old sessions of a migrated project are locked at their next prompt. Cloud sessions opened before cannot be
@@ -43,5 +48,22 @@ new session of this folder with "continue installation".
 like session-guard notices in?" and run `sg install language <code>`). Missing translations: a JSON {name: text}
 keeping every `%(name)s` / `%(name)d`, `sg install messages <file>`, then delete the file.
 
-## Uninstall (on request)
-`sg install uninstall`, then `claude plugin uninstall session-guard@session-guard`. Project stores and files stay.
+## Uninstall (on request; every step needs the user's yes, pushes their own yes)
+Computer, from `session-guard-executive` (run the `sg` steps before the plugin is removed):
+1. `sg migrate status`: the projects on 2.0. For each, `sg task list --root "<folder>"`: tell the user which open
+   tasks and hand-offs exist; finish or hand off what matters first.
+2. Per project, the user chooses: keep its Session Guard files as plain history (default) or remove them too.
+   `sg install remove-project "<folder>"` keeps STATUS.md's last task list as plain text, the archive, backlog
+   and completed list, and removes the computer guard hook, Session Guard's copy, skills copies and setup marker;
+   `--remove-store` also removes `.claude/session-guard2/` (the task store). Git projects: commit those changes;
+   push only with the user's yes.
+3. `sg install uninstall` removes the 2.0 (and any 1.x) block of `~/.claude/CLAUDE.md` and the status line;
+   `--purge-state` also deletes `~/.claude/session_guard_v2/` (session records, quota readings, migration
+   checkpoint, backups: say so before).
+4. `claude plugin uninstall session-guard@session-guard` (optionally `claude plugin marketplace remove
+   session-guard`); the user fully quits Claude and reopens it. Old locks end with the plugin.
+5. Write one line in the user's PC maintenance log if they keep one.
+Cloud repository (from a cloud session of it, or a computer clone): `sg install remove-project "$REPO"` (same
+choices), commit, push or pull request with the user's yes. Side branches `sg/*` are listed for the user: the
+cloud cannot delete branches (the GitHub proxy refuses deletions), so the user deletes them on GitHub. Old cloud
+sessions: archive them at claude.ai/code.

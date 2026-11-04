@@ -190,6 +190,69 @@ def install_copy(root):
     return "copied to %s; hooks added: %d" % (COPY_DIR.replace("\\", "/"), added)
 
 
+def remove_project(root, remove_store=False):
+    """Takes Session Guard out of one project (computer or cloud repository), keeping its history readable:
+    STATUS.md keeps its last task list as plain text, the archive, backlog and completed list stay; Session Guard's
+    hooks (computer guard, repository copy hooks), its copy, its skills copies and setup marker go; the task store
+    only with remove_store. Nothing is committed or pushed here."""
+    from . import render
+    done = []
+    path = render.doc(root, "STATUS.md")
+    text = core.read_text(path)
+    if text:
+        before, body, after = render.split_status(text)
+        if body is not None:
+            note = "<!-- Session Guard 2.0 removed %s: the last generated task list, now plain text -->" % core.today()
+            core.write_text(path, render.tidy(before + note + "\n" + body + "\n" + after))
+            done.append("STATUS.md: task block kept as plain text")
+    p = os.path.join(root, ".claude", "settings.json")
+    s = load_settings(p)
+    if s and isinstance(s.get("hooks"), dict):
+        n = 0
+        for event in list(s["hooks"]):
+            groups = s["hooks"][event] if isinstance(s["hooks"][event], list) else []
+            for g in groups:
+                if isinstance(g, dict) and isinstance(g.get("hooks"), list):
+                    keep = [h for h in g["hooks"] if not (isinstance(h, dict) and (
+                        HOME_SIGN in str(h.get("command")) or "session-guard2/bin" in str(h.get("command"))))]
+                    n += len(g["hooks"]) - len(keep)
+                    g["hooks"] = keep
+            s["hooks"][event] = [g for g in groups if not (isinstance(g, dict) and g.get("hooks") == [])]
+            if not s["hooks"][event]:
+                del s["hooks"][event]
+        if not s["hooks"]:
+            del s["hooks"]
+        if n:
+            save_settings(p, s)
+            done.append(".claude/settings.json: %d Session Guard hook(s) removed" % n)
+    for rel in (COPY_DIR, os.path.join(".claude", "session-guard2", "setup.json")):
+        q = os.path.join(root, rel)
+        if os.path.isdir(q):
+            shutil.rmtree(q)
+            done.append(rel.replace("\\", "/") + " removed")
+        elif os.path.isfile(q):
+            os.remove(q)
+            done.append(rel.replace("\\", "/") + " removed")
+    for folder in ("session-guard", "session-guard-setup"):
+        q = os.path.join(root, ".claude", "skills", folder)
+        if "SESSION-GUARD: 2.0" in (core.read_text(os.path.join(q, "SKILL.md")) or ""):
+            shutil.rmtree(q)
+            done.append(".claude/skills/%s removed" % folder)
+    if remove_store and os.path.isdir(core.project_dir(root)):
+        shutil.rmtree(core.project_dir(root))
+        done.append(".claude/session-guard2 (task store) removed")
+    return "; ".join(done) or "nothing of Session Guard 2.0 found"
+
+
+def purge_state():
+    """~/.claude/session_guard_v2 (session records, quota readings, migration checkpoint, backups) is deleted."""
+    p = core.state_dir()
+    if not os.path.isdir(p):
+        return "none"
+    shutil.rmtree(p, ignore_errors=True)
+    return "removed " + p
+
+
 def plugin_installed(self_path):
     """A Session Guard script under ~/.claude/plugins other than this copy: the repository copy stays quiet."""
     import glob

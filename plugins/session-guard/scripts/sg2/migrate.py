@@ -32,6 +32,68 @@ INSTRUCTION_FILES = ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md", "AGENT
                      ".windsurfrules", ".clinerules", ".github/copilot-instructions.md", "README.md", "README.tr.md",
                      "CONTEXT.md", "MEMORY.md")
 STATUS_LIKE = re.compile(r"status|hand-?off|devir|todo|progress|notes|backlog|task|görev|gorev|roadmap|plan", re.I)
+# A file that keeps tasks, whatever its name: checkboxes, or headings that name pending / finished work.
+CHECK_OPEN = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[ \]", re.M)
+CHECK_DONE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[[xX✓]\]", re.M)
+TASK_HEADING = re.compile(r"^#{1,6}\s+.*(?:to-?do|backlog|pending|open|next|done|completed|finished|tasks?|ideas?|"
+                          r"yapılacak|yapilacak|bekleyen|sıradaki|siradaki|tamamlan|biten|görev|gorev|fikir)", re.I | re.M)
+SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "Library", "Temp", "obj", "bin",
+             ".next", "session-guard2"}
+SG_DOCS = ("docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md", "docs/COMPLETED_TASKS.md")
+
+
+def task_list_files(root, depth=3, limit=40):
+    """Files that list tasks (open or finished), found by content, not by name. Their open items become tasks or
+    ideas, their finished items lines of COMPLETED_TASKS.md, and the files are retired after the user's yes."""
+    found, base_depth = [], root.rstrip("\\/").count(os.sep)
+    for folder, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")] \
+            if folder.count(os.sep) - base_depth < depth else []
+        for n in sorted(files):
+            if os.path.splitext(n)[1].lower() not in (".md", ".txt", ""):
+                continue
+            p = os.path.join(folder, n)
+            rel = os.path.relpath(p, root).replace("\\", "/")
+            if rel in SG_DOCS or os.path.getsize(p) > 300000:
+                continue
+            text = core.read_text(p) or ""
+            opened, done = len(CHECK_OPEN.findall(text)), len(CHECK_DONE.findall(text))
+            heads = [h.strip() for h in TASK_HEADING.findall(text)][:6]
+            if opened or done or heads:
+                found.append({"path": rel, "open_items": opened, "done_items": done, "task_headings": heads,
+                              "lines": len(text.splitlines()), "modified": core.iso(os.path.getmtime(p))})
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def _norm(line):
+    return re.sub(r"[^\w ]+", " ", re.sub(r"^\s*(?:[-*+>]|\d+[.)]|\[[ xX]\])\s*", "", line)).lower().split()
+
+
+def duplicates(root, rule_files, state_files, limit=40):
+    """Lines of the instruction files that repeat (nearly word for word) a line of a status or task file: in 2.0 a
+    rule is never also a task or a state line, so each pair is settled in the plan."""
+    import difflib
+    out = []
+    states = []
+    for rel in state_files:
+        for line in (core.read_text(os.path.join(root, rel)) or "").splitlines():
+            words = _norm(line)
+            if len(" ".join(words)) >= 20:
+                states.append((rel, line.strip(), " ".join(words)))
+    for rel in rule_files:
+        for line in (core.read_text(os.path.join(root, rel)) or "").splitlines():
+            words = " ".join(_norm(line))
+            if len(words) < 20:
+                continue
+            for srel, sline, swords in states:
+                if srel != rel and difflib.SequenceMatcher(None, words, swords).ratio() >= 0.85:
+                    out.append({"rule_file": rel, "rule_line": line.strip(), "state_file": srel, "state_line": sline})
+                    break
+            if len(out) >= limit:
+                return out
+    return out
 
 
 def path():
@@ -185,6 +247,10 @@ def survey(root):
                 info = _file_info(folder, n)
                 info["path"] = os.path.relpath(os.path.join(folder, n), root).replace("\\", "/")
                 facts["status_like_files"].append(info)
+    facts["task_list_files"] = task_list_files(root)
+    state_files = sorted({f["path"] for f in facts["status_like_files"]} | {f["path"] for f in facts["task_list_files"]})
+    facts["duplicates"] = duplicates(root, [f["path"] for f in facts["instruction_files"]
+                                            if not f["path"].lower().startswith("readme")], state_files)
     for sub in ("skills", "commands", "agents", "hooks", "scripts", "rules"):
         p = os.path.join(root, ".claude", sub)
         if os.path.isdir(p):
@@ -211,8 +277,14 @@ PLAN_HELP = """Plan file (JSON), written by Claude after reading the survey and 
  "tasks": [{"title": "...", "priority": "P1|P2|P3", "status": "open|in_progress|blocked",
             "done": ["..."], "pending": ["..."], "subtasks": [{"title": "...", "done": [], "pending": []}]}],
  "ideas": ["..."], "completed": ["one line per finished item found"],
+ "retire": ["old task / status / hand-off files whose content the plan moved into Session Guard's files"],
+ "claude_md_remove": ["exact CLAUDE.md lines that are state or tasks, not rules (or repeat a task / STATUS line)"],
+ "rule_scripts": ["a CLAUDE.md rule a script or hook could check instead of Claude: proposed as a backlog idea"],
  "contradictions": ["..."], "uncertain": ["..."], "sources": ["files and commits the plan rests on"]}
-At most 3 tasks (the active-task limit); the rest goes to ideas."""
+At most 3 tasks (the active-task limit); the rest goes to ideas. Every open item of the survey's task_list_files
+becomes a task, a subtask or an idea, every finished item a "completed" line; then the file goes into "retire"
+(a copy is kept). A rule stays only in CLAUDE.md, a task or state line only in Session Guard's files: settle each
+pair of the survey's "duplicates" in the plan."""
 
 
 def _validate_plan(plan):
@@ -226,6 +298,41 @@ def _validate_plan(plan):
             raise store.Refused("every plan task needs a title")
     if plan.get("home", "computer") not in ("computer", "cloud"):
         raise store.Refused("home must be computer or cloud")
+    for rel in plan.get("retire") or []:
+        r = str(rel).replace("\\", "/").lstrip("/")
+        if ".." in r.split("/") or r.lower() in ("claude.md", "readme.md", "docs/status.md") or r in SG_DOCS \
+                or r.startswith(".claude/session-guard2"):
+            raise store.Refused("cannot retire %s (outside the project, an instruction file or a Session Guard file)" % rel)
+
+
+def _retire(root, plan, bdir, report):
+    """After apply: old task files are removed (copies in the backup folder), CLAUDE.md loses its state lines."""
+    retired = []
+    for rel in plan.get("retire") or []:
+        p = core.exists_ci(root, str(rel).replace("\\", "/"))
+        if not p or not os.path.isfile(p):
+            report["warnings"].append("retire: %s not found" % rel)
+            continue
+        os.makedirs(bdir, exist_ok=True)
+        shutil.copy2(p, os.path.join(bdir, "retired__" + os.path.relpath(p, root).replace(os.sep, "__")))
+        os.remove(p)
+        retired.append(os.path.relpath(p, root).replace("\\", "/"))
+    lines = [str(l).strip() for l in plan.get("claude_md_remove") or [] if str(l).strip()]
+    cm = core.exists_ci(root, "CLAUDE.md")
+    if lines and cm:
+        os.makedirs(bdir, exist_ok=True)
+        shutil.copy2(cm, os.path.join(bdir, "CLAUDE.md"))
+        text = core.read_text(cm)
+        kept, removed = [], []
+        for line in text.splitlines(keepends=True):
+            if line.strip() in lines and line.strip() not in removed:
+                removed.append(line.strip())
+                continue
+            kept.append(line)
+        core.write_text(cm, render.tidy("".join(kept)))
+        report["warnings"] += ["CLAUDE.md line not found, kept nothing: %s" % l for l in lines if l not in removed]
+        report["claude_md_removed"] = removed
+    report["retired"] = retired
 
 
 def backup_dir(root):
@@ -296,6 +403,14 @@ def apply(root, plan, migrator_session):
     for line in plan.get("completed") or []:
         core.append_text(render.doc(root, "COMPLETED_TASKS.md"),
                          "- %s %s imported (pre-2.0): %s\n" % (core.today(), render.SIGN, line))
+    _retire(root, plan, bdir, report)
+    from . import rules as rl
+
+    def reviewed(d):
+        for idea in plan.get("rule_scripts") or []:
+            store.add_idea(d, migrator_session, "Script instead of a rule: %s" % idea, source="rule-review")
+        d["rule_review"] = {"lines": rl.project_rule_lines(root), "at": core.iso(), "by": migrator_session}
+    store.mutate(root, reviewed)
     notes = ["Plan sources: " + "; ".join(plan.get("sources") or ["-"])]
     notes += ["Contradiction: " + c for c in plan.get("contradictions") or []]
     notes += ["Uncertain: " + c for c in plan.get("uncertain") or []]
@@ -306,12 +421,15 @@ def apply(root, plan, migrator_session):
                                                    report["rollback"]["tag"]))
     if report["backup"]:
         notes.append("File copies before migration: " + report["backup"])
+    notes += ["Retired (content moved into Session Guard's files; copy kept): " + r for r in report["retired"]]
+    notes += ["Removed from CLAUDE.md (state, not a rule): " + r for r in report.get("claude_md_removed") or []]
     render.append_archive(root, "Migration to Session Guard 2.0 (%s)" % store.load(root)["project_id"], notes)
     pid = store.load(root)["project_id"]
 
     def upd(d):
         d["projects"][core.key(root)].update(state="applied", project_id=pid, migration_task=mig_id,
                                              rollback=report["rollback"], backup=report["backup"],
+                                             retired=report["retired"],
                                              warnings=report["warnings"], updated=core.iso())
         log(d, "apply: %s -> %s" % (root, pid))
     change(upd)
@@ -372,6 +490,12 @@ def push(root, approval):
     if not gitops.is_repo(root):
         return {"verified": False, "why": "not a git repository: nothing to push (no remote rollback guarantee)"}
     data = store.load(root)
+    gone = [r for r in rec.get("retired") or [] if gitops.git(root, "ls-files", "--error-unmatch", "--", r)[0] == 0]
+    if gone:
+        c = gitops.commit_work(root, gone, "Session Guard 2.0: retire old task files of %s (moved into Session "
+                               "Guard's files)\n\nSESSION-GUARD: 2.0" % data["name"])
+        if c.get("error"):
+            return {"verified": False, "why": c["error"]}
     c = gitops.commit_paths(root, "Session Guard 2.0: migrate %s (%s)\n\nSESSION-GUARD: 2.0" % (
         data["name"], data["project_id"]))
     if c.get("error"):

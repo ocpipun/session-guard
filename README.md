@@ -129,14 +129,34 @@ small hook that blocks cloud sessions of it. A cloud project carries a copy of S
 - **Budget:** an installation session may use about 800k tokens; at 90% it stops at a safe point and the user
   continues in a new session with `continue installation`.
 - Notices can be shown in the user's language (`sg install language`).
-- Uninstall: `sg install uninstall`, then `claude plugin uninstall session-guard@session-guard`; project files stay.
+- Old task lists are found by content (checkboxes, "To do / Pending / Done" headings), whatever the file is
+  called: their open items become tasks or ideas, finished items lines of `COMPLETED_TASKS.md`, and the old files
+  are retired (removed with the user's yes, a copy kept). CLAUDE.md lines that repeat a status or task line are
+  listed; state leaves CLAUDE.md, so a rule and a task are never copies of each other.
 
-## 11. Commands
+## 11. Uninstall
+Every step with the user's yes ([setup skill](plugins/session-guard/skills/setup/SKILL.md), "Uninstall").
+- **Computer** (from `session-guard-executive`): open tasks and hand-offs of every project are shown first. Per
+  project: `sg install remove-project` keeps STATUS.md's last task list as plain text plus the archive, backlog
+  and completed list, and removes Session Guard's hooks, copy, skills copies and setup marker (`--remove-store`
+  also the task store). Then `sg install uninstall` (rules block, status line; `--purge-state` also the machine
+  state) and `claude plugin uninstall session-guard@session-guard`, then a full restart.
+- **Cloud repository:** `sg install remove-project` in a session of it, commit, push or pull request. The cloud
+  cannot delete branches, so leftover `sg/*` branches are deleted by the user on GitHub; old cloud sessions are
+  archived at claude.ai/code.
+
+## 12. Rules become scripts
+Whenever the project's CLAUDE.md gets new or changed rule lines (also when it is first created), Session Guard asks
+Claude for a rule review: for every rule a script or hook could check, Claude proposes the script as a backlog
+idea, and the user decides. So checks move from Claude (tokens every session) to scripts (no tokens). STATUS.md
+is edited by section, never by line number; empty lines and empty bullets left by an edit are removed.
+
+## 13. Commands
 User: `start long mode`, `finish session`, `continue installation` (at the start followed by a comma or period, or
-at the end of a message). Claude uses `sg task …`, `sg idea …`, `sg handoff write|publish|adopt`, `sg migrate …`,
-`sg install …`, `sg manifest verify` and `sg report` itself.
+at the end of a message). Claude uses `sg task …`, `sg idea …`, `sg rules check|reviewed`,
+`sg handoff write|publish|adopt`, `sg migrate …`, `sg install …`, `sg manifest verify` and `sg report` itself.
 
-## 12. Limits
+## 14. Limits
 - The transcript format Session Guard reads is not documented by Anthropic and may change.
 - Old cloud sessions cannot be locked from the computer; archive them at claude.ai/code.
 - Projects without git have no git rollback; Session Guard keeps file copies only.
@@ -145,7 +165,7 @@ at the end of a message). Claude uses `sg task …`, `sg idea …`, `sg handoff 
   started from the default branch sees that hand-off after `sg handoff adopt`.
 - What could not be verified: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §8.
 
-## 13. Tests
+## 15. Tests
 ```bash
 python -m unittest discover -s tests
 ```

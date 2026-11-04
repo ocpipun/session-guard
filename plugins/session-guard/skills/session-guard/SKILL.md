@@ -38,6 +38,18 @@ Only on a Session Guard instruction or the user's request (250k is a notice only
 5. 300k (normal) or 800k (long mode) hand-off: also the SESSION MEASUREMENT the instruction gives, as in "Finish
    session" step 2 ("finish session" is refused after this hand-off).
 
+## Rule review (RULE REVIEW)
+When Session Guard lists new CLAUDE.md rule lines: for each, ask whether a script or hook could check or do it
+instead of you (deterministic: file names, formats, limits, line counts, commit messages, forbidden paths, git
+steps); look at what the project already has. Each candidate: `sg idea add "Script instead of a rule: <rule> ->
+<what the script does>" --source rule-review`, all in one numbered list for the user (proposals, no work). A line
+that is state or a task, not a rule: say so; with the user's yes move it to a task and out of CLAUDE.md. Then
+`sg rules reviewed`.
+
+## STATUS by section
+Edit docs/STATUS.md by section (its heading or TASK-ID), never by line number; delete a line completely. Session
+Guard removes empty lines and empty bullets an edit leaves behind.
+
 ## Taking over
 `sg task show <id>` first: the "Work:" line says where the work is. A task on a side branch this checkout lacks
 (session start lists "HAND-OFF BRANCHES"): `sg handoff adopt sg/task-...` merges its work and hand-off here

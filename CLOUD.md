@@ -25,3 +25,6 @@ as self-modification, measured with 1.4).
    `sg/<task-id>`; a new session (started from the default branch) is told which side branches hold hand-offs and
    merges one with `sg handoff adopt <branch>`. The user merges finished side branches into the default branch.
 8. Update: run steps 1, 2 and 4 again (`$SG install cloud "$REPO"` replaces the copy), commit, push.
+9. Remove: `$SG install remove-project "$REPO"` (`--remove-store` also the task store), commit, push or pull
+   request with the user's yes; the user deletes leftover `sg/*` branches on GitHub (the cloud cannot delete
+   branches) and archives old sessions at claude.ai/code.

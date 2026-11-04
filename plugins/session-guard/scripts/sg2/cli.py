@@ -98,7 +98,7 @@ def cmd_idea(a):
     root = root_of(a)
     sid = session_of(a)
     if a.action == "add":
-        iid = store.mutate(root, lambda d: store.add_idea(d, sid, a.text))
+        iid = store.mutate(root, lambda d: store.add_idea(d, sid, a.text, source=a.source))
         out("backlog: %s" % iid)
     else:
         t = store.mutate(root, lambda d: store.promote_idea(d, sid, a.id, a.approval))
@@ -205,6 +205,26 @@ def adopt(root, sid, branch):
             render.render_backlog(root, data)
         gitops.commit_paths(root, "Session Guard 2.0: STATUS after taking over %s\n\nSESSION-GUARD: 2.0" % branch)
     return data
+
+
+def cmd_rules(a):
+    """RULE REVIEW: `check` lists the CLAUDE.md rule lines not reviewed yet; `reviewed` records the current ones."""
+    root = root_of(a)
+    data = store.load(root)
+    if not data:
+        raise store.Refused("not a 2.0 project: " + root)
+    if a.action == "check":
+        new = rules.new_rule_lines(root, data)
+        out("\n".join(new) if new else "no new rule lines")
+        return 0
+    sid = session_of(a)
+    lines = rules.project_rule_lines(root)
+
+    def change(d):
+        d["rule_review"] = {"lines": lines, "at": core.iso(), "by": sid}
+    store.mutate(root, change, render=False)
+    out("reviewed: %d rule lines" % len(lines))
+    return 0
 
 
 def cmd_handoff(a):
@@ -335,8 +355,14 @@ def cmd_install(a):
     elif a.action == "uninstall":
         cfg.pop("installed", None)
         core.save_config(cfg)
-        out("uninstalled: global block %s; status line %s (project files and stores are kept)" % (
-            rules.remove_global_block(), place.uninstall_statusline()))
+        out("uninstalled: global block %s; 1.x block %s; status line %s (project files and stores are kept)" % (
+            rules.remove_global_block(), rules.remove_v1_block(force=True), place.uninstall_statusline()))
+        if a.purge_state:
+            out("machine state: %s" % place.purge_state())
+    elif a.action == "remove-project":
+        if not a.code:
+            raise store.Refused("give the project folder")
+        out(place.remove_project(os.path.abspath(a.code), remove_store=a.remove_store))
     elif a.action == "cloud":
         out("cloud copy: %s" % place.install_copy(os.path.abspath(a.code or os.getcwd())))
     elif a.action == "home-guard":
@@ -433,6 +459,10 @@ def parser():
     i.add_argument("action", choices=["add", "promote"])
     i.add_argument("text_or_id")
     i.add_argument("--approval")
+    i.add_argument("--source")
+
+    u = sub.add_parser("rules", parents=[common])
+    u.add_argument("action", choices=["check", "reviewed"])
 
     h = sub.add_parser("handoff", parents=[common])
     h.add_argument("action", choices=["write", "publish", "adopt"])
@@ -458,9 +488,11 @@ def parser():
 
     n = sub.add_parser("install")
     n.add_argument("action", choices=["approve", "uninstall", "conflicts", "language", "messages", "cloud",
-                                      "home-guard"])
+                                      "home-guard", "remove-project"])
     n.add_argument("code", nargs="?")
     n.add_argument("--executive")
+    n.add_argument("--purge-state", action="store_true")
+    n.add_argument("--remove-store", action="store_true")
 
     f = sub.add_parser("manifest")
     f.add_argument("action", choices=["build", "verify"])
@@ -486,6 +518,8 @@ def run(argv):
             return cmd_task(a)
         if a.cmd == "idea":
             return cmd_idea(a)
+        if a.cmd == "rules":
+            return cmd_rules(a)
         if a.cmd == "handoff":
             return cmd_handoff(a)
         if a.cmd == "migrate":
