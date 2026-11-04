@@ -190,6 +190,23 @@ def remote_side_branches(root):
     return found
 
 
+def merged_side_branches(root):
+    """sg/* branches on the remote already contained in the remote default branch (merged, safe to delete). Only
+    commits this checkout has can be compared; others are left out."""
+    rem = remote(root)
+    if not rem:
+        return []
+    rc, out, _ = git(root, "ls-remote", rem, "HEAD", "refs/heads/" + SIDE_PREFIX + "*", timeout=6)
+    if rc:
+        return []
+    refs = [l.split("\t") for l in out.splitlines() if "\t" in l]
+    default = next((sha for sha, ref in refs if ref == "HEAD"), None)
+    if not default:
+        return []
+    return [ref.replace("refs/heads/", "", 1) for sha, ref in refs if ref.startswith("refs/heads/")
+            and sha != default and git(root, "merge-base", "--is-ancestor", sha, default)[0] == 0]
+
+
 def conflicted(root):
     return [f for f in git(root, "diff", "--name-only", "--diff-filter=U")[1].splitlines() if f]
 

@@ -548,6 +548,10 @@ class Work(Base):
         self.assertIn("Work: side branch sg/task-002", self.c(root2, "task", "show", "TASK-003", sid=S2))
         self.c(root2, "task", "claim", "TASK-003", sid=S2, ok=True)
         self.assertNotIn("HAND-OFF BRANCHES", self.ctx(self.chook(root2, "SessionStart", "c3")))
+        self.git(root2, "push", "-q", "origin", "HEAD:main")                         # the side branch is merged
+        out = self.chook(root2, "SessionStart", "c4")
+        self.assertIn("safe to delete on GitHub: sg/task-002", out.get("systemMessage", ""))
+        self.assertIn("Automatically delete head branches", out.get("systemMessage", ""))
 
     def test_cloud_several_tasks_need_paths_and_nothing_unsaved_is_published(self):
         root, _ = self.repo("cs", "cloud")
@@ -601,15 +605,18 @@ class Cleanup(Base):
         root = self.migrated()
         p = os.path.join(root, "docs", "STATUS.md")
         with open(p, "a", encoding="utf-8") as fh:
-            fh.write("\n\n\n- kept note   \n-\n- \n\n\n- second note\n\n\n")
+            fh.write("\n## Notes\n\n\n- kept note   \n-\n- \n\n\n- second note\n\n\n")
         out = self.hook("PostToolUse", "st", tool_name="Edit", tool_input={"file_path": p}, cwd=root)
         self.hook("SessionStart", "st", cwd=root)
         out = self.hook("PostToolUse", "st", tool_name="Edit", tool_input={"file_path": p}, cwd=root)
         text = self.text(p)
         self.assertNotIn("\n\n\n", text)
         self.assertNotRegex(text, r"(?m)^-\s*$")
-        self.assertIn("- IDEA-001 · kept note\n- IDEA-002 · second note\n", text)   # Notes bullets got ids
-        self.assertNotRegex(text.split("## Notes")[1], r"(?m)^- ")
+        self.assertNotRegex(text.split("## Notes")[1], r"(?m)^- ")                # Notes bullets left STATUS
+        backlog = self.text(root, "docs", "TASK_BACKLOG.md")
+        self.assertIn("- IDEA-001 · kept note", backlog)                             # ...and became ideas
+        self.assertIn("- IDEA-002 · second note", backlog)
+        self.assertIn("ideas 3/10: docs/TASK_BACKLOG.md", text)
 
     def test_rule_review_on_new_claude_md_rules(self):
         root = self.migrated(files={"CLAUDE.md": "# Rules\n- Answer in Turkish, short sentences.\n"})
@@ -735,8 +742,18 @@ class Limits(Base):
         out = self.s("task", "start", "TASK-003", ok=True)
         self.assertIn("started", out)
         status = self.text(self.root, "docs", "STATUS.md")
-        self.assertIn("## Queue (9/10", status)
-        self.assertLessEqual(len(status.splitlines()), 50)
+        self.assertIn("Queued tasks 9/10", status)
+        self.assertLessEqual(len(status.splitlines()), 30)                          # lists live in the backlog
+        self.assertIn("## Queued tasks (9/10)", self.text(self.root, "docs", "TASK_BACKLOG.md"))
+        out = self.sg("task", "check", "--title", "queued work number 4 about topic eeeeee", "--root", self.root)
+        self.assertIn("queued 9/10 · ideas 10/10", out)
+        self.assertIn("TASK-006 task (queued", out)
+        bl = os.path.join(self.root, "docs", "TASK_BACKLOG.md")
+        with open(bl, "a", encoding="utf-8") as fh:
+            fh.write("- a fresh thought about logging\n")
+        self.hook("SessionStart", "lim", cwd=self.root)
+        out = self.hook("PostToolUse", "lim", tool_name="Edit", tool_input={"file_path": bl}, cwd=self.root)
+        self.assertIn("10 ideas already wait", self.ctx(out))                        # limit holds for hand edits
 
     def test_rule_ids_and_rule_script_task(self):
         cm = os.path.join(self.root, "CLAUDE.md")

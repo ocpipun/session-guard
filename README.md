@@ -72,7 +72,11 @@ A 24-hour watch tells the user when a turn or a background job has been running 
   to plan in a separate project: Session Guard optimizes session cost, it does not manage the project.
 - **No duplicate work:** a new task or idea is compared with every existing one (running, queued, finished,
   ideas); a near copy is refused, related ones are shown so Claude checks for conflicts or bugs and warns the user.
-- **STATUS Notes:** a bullet written under "## Notes" becomes an idea with an id.
+- **Waiting work outside STATUS:** queued tasks and ideas are listed in `docs/TASK_BACKLOG.md`; STATUS only shows
+  their counts, so it stays short. A bullet written under "## Add an idea" there (or under a "## Notes" heading of
+  STATUS) becomes an idea with an id and is checked against the existing work.
+- **Every new work request is checked first:** `sg task check` shows the limits and the related running, queued
+  and finished tasks and ideas, so overlapping, conflicting or contradicting work is found before it starts.
 - **New id when needed:** continuing a task keeps its id; redoing a wrongly finished task or extending a finished
   one is a new task linked to the old one. A finished subtask never finishes its parent.
 - **Safe parallel writes:** one lock per project store, a fresh read inside the lock, revision checks; direct edits
@@ -95,7 +99,7 @@ nothing is left half-written.
 
 When a side branch is merged, conflicts in Session Guard's own files are resolved automatically (tasks are merged;
 two different tasks that got the same id on two branches are renumbered); a conflict in the project's own files
-stops the merge and changes nothing. Side branches `sg/<task-id>` hold the project's own unfinished work (its code), not Session Guard's files. Git never deletes a branch when it is merged (GitHub can, for a merged pull request, when the repository setting "Automatically delete head branches" is on), and a cloud session cannot delete branches at all (its GitHub proxy refuses deletions). Delete merged side branches by hand on GitHub. When a newer session claims a task, the old session is locked once it owns no
+stops the merge and changes nothing. Side branches `sg/<task-id>` hold the project's own unfinished work (its code), not Session Guard's files. Git never deletes a branch when it is merged (GitHub can, for a merged pull request, when the repository setting "Automatically delete head branches" is on), and a cloud session cannot delete branches at all (its GitHub proxy refuses deletions). Delete merged side branches by hand on GitHub. Tip: GitHub repository Settings > General > Pull Requests > "Automatically delete head branches" deletes a side branch after its pull request is merged (GitHub docs: a deleted head branch can be restored from the closed pull request with "Restore branch"). Session Guard tells the user at every session start which side branches are merged and can be deleted. Resetting or reverting the default branch does not change any other branch: each branch is its own pointer in git. When a newer session claims a task, the old session is locked once it owns no
 open task. Claimed hand-offs go to `STATUS_ARCHIVE.md`.
 
 ## 8. Project files

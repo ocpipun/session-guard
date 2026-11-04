@@ -73,7 +73,11 @@ Kilitli oturuma mesaj ulaşmaz; kullanıcıya nedeni söylenir. Türleri:
 - **Aynı işi iki kez yapmamak:** yeni görev ya da fikir mevcut hepsiyle (süren, sıradaki, biten, fikirler)
   karşılaştırılır; neredeyse aynısı reddedilir, benzerleri gösterilir; Claude çakışma ya da hata riskini denetler
   ve kullanıcıyı uyarır.
-- **STATUS notları:** "## Notes" altına yazılan her madde kimlikli bir fikre dönüşür.
+- **Bekleyen işler STATUS dışında:** sıradaki görevler ve fikirler `docs/TASK_BACKLOG.md` dosyasında listelenir;
+  STATUS yalnız sayılarını gösterir, böylece kısa kalır. Oraya "## Add an idea" başlığı altına (ya da STATUS'ta
+  bir "## Notes" başlığı altına) yazılan her madde kimlikli bir fikre dönüşür ve mevcut işlerle karşılaştırılır.
+- **Her yeni iş isteği önce denetlenir:** `sg task check` sınırları ve ilgili süren, sıradaki, biten görevleri ve
+  fikirleri gösterir; çakışan, çelişen ya da aynı işe odaklanan iş başlamadan bulunur.
 - **Gerektiğinde yeni kimlik:** kaldığı yerden devam aynı kimlikle; hatalı biten işi yeniden yapmak ya da biten
   işe özellik eklemek eskisine bağlı yeni görevdir. Alt görev bitince üst görev kendiliğinden bitmez.
 - **Güvenli paralel yazma:** proje başına bir kilit, kilit içinde taze okuma, sürüm denetimi; görev kaydının elle
@@ -96,7 +100,7 @@ yarım yazılmış hiçbir şey bırakmaz.
 
 Yan dal birleştirilirken Session Guard'ın kendi dosyalarındaki çakışmalar kendiliğinden çözülür (görevler
 birleştirilir; iki dalda aynı kimliği almış iki farklı göreve yeni kimlik verilir). Projenin kendi dosyalarında
-çakışma olursa birleştirme durur ve hiçbir şey değişmez. `sg/<görev-kimliği>` yan dalları Session Guard'ın değil, projenin kendi yarım işini (kodunu) taşır. Git, birleştirilen dalı kendiliğinden silmez (GitHub, depo ayarlarında "Automatically delete head branches" açıksa birleştirilen pull request'in dalını siler); bulut oturumu ise hiç dal silemez (GitHub vekili silmeyi reddeder). Birleştirilen yan dalları GitHub'da elle silin. Daha yeni bir oturum görevi alınca, açık görevi kalmayan
+çakışma olursa birleştirme durur ve hiçbir şey değişmez. `sg/<görev-kimliği>` yan dalları Session Guard'ın değil, projenin kendi yarım işini (kodunu) taşır. Git, birleştirilen dalı kendiliğinden silmez (GitHub, depo ayarlarında "Automatically delete head branches" açıksa birleştirilen pull request'in dalını siler); bulut oturumu ise hiç dal silemez (GitHub vekili silmeyi reddeder). Birleştirilen yan dalları GitHub'da elle silin. Öneri: GitHub'da depo Settings > General > Pull Requests > "Automatically delete head branches" ayarı açılırsa, pull request'i birleştirilen yan dal kendiliğinden silinir (GitHub belgesi: silinen dal, kapanmış pull request sayfasındaki "Restore branch" ile geri yüklenebilir). Session Guard her oturum başında hangi yan dalların birleştirildiğini ve silinebileceğini kullanıcıya söyler. Ana dalı geri almak (reset ya da revert) başka hiçbir dalı değiştirmez: git'te her dal kendi başına bir işaretçidir. Daha yeni bir oturum görevi alınca, açık görevi kalmayan
 eski oturum kilitlenir. Alınan devir notları `STATUS_ARCHIVE.md`'ye geçer.
 
 ## 8. Proje dosyaları

@@ -270,11 +270,20 @@ def on_session_start(inp):
         except (OSError, core.Busy):
             pass
     out = start_context(root, rec, data, source)
+    merged = []
+    if data and gitops.is_repo(root) and (core.in_cloud() or any(
+            (t.get("work") or {}).get("mode") == "side-branch" for t in data["tasks"].values())):
+        merged = gitops.merged_side_branches(root)
+        if merged:
+            out += ("\n\n[Session Guard 2.0] MERGED SIDE BRANCHES (the user was told): %s. After you merge a pull "
+                    "request or a side branch yourself, tell the user the same in one line." % ", ".join(merged))
     mig = migrate.load()
     if mig["phase"] == "paused":
         out += ("\n\n[Session Guard 2.0] INSTALLATION PAUSED (%s). Only \"continue installation\" in %s continues it; "
                 "until then every prompt is blocked." % ((mig.get("paused") or {}).get("reason"), EXECUTIVE))
     user = msg("migration_pending") if root and not data and source == "startup" else None
+    if merged:
+        user = msg("side_branches_merged", names=", ".join(merged[:10]))
     return emit(ctx("SessionStart", out, user))
 
 
@@ -480,20 +489,24 @@ def restore_status(root):
             "store. Change tasks only with `sg task ...`; free text goes under \"## Notes\".")
 
 
-def absorb_notes(root, sid):
-    """Bullets written under "## Notes" of STATUS.md become ideas with temporary ids (IDEA-xxx), so nothing in
-    STATUS lives without an id; a bullet the idea limit or the duplicate check refuses stays, with the reason."""
-    path = render.doc(root, "STATUS.md")
+def absorb_notes(root, sid, name="STATUS.md", heading="## notes"):
+    """Bullets written by hand under "## Notes" of STATUS.md or "## Add an idea" of TASK_BACKLOG.md become ideas
+    with temporary ids (IDEA-xxx), checked against the existing work; nothing waits without an id. A bullet the
+    idea limit or the duplicate check refuses stays, with the reason."""
+    path = render.doc(root, name)
     text = core.read_text(path)
     if not text or not sid:
         return None
-    before, body, after = render.split_status(text)
-    if body is None:
-        return None
+    if name == "STATUS.md":
+        before, body, after = render.split_status(text)
+        if body is None:
+            return None
+    else:
+        after = text
     found, inside = [], False
     for line in after.splitlines():
         if line.startswith("#"):
-            inside = line.strip().lower().startswith("## notes")
+            inside = line.strip().lower().startswith(heading)
         elif inside and render.ITEM.match(line):
             item = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", line).strip()
             if item.lower().strip(".") not in ("none", "yok"):
@@ -518,7 +531,7 @@ def absorb_notes(root, sid):
                 render.render_backlog(root, data)
         except core.Busy:
             pass
-    return "[Session Guard 2.0] STATUS Notes: %s%s" % (
+    return "[Session Guard 2.0] %s %s: %s%s" % (name, heading.strip("# ").title(),
         "became ideas %s (temporary ids; `sg idea promote` makes a task). " % ", ".join(added) if added else "",
         ("Refused, still in Notes: " + "; ".join(refused)) if refused else "")
 
@@ -608,6 +621,13 @@ def on_tool(inp):
         for r in (restore_status(root), absorb_notes(root, rec.get("sg_id")), tidy_status(root)):
             if r:
                 extra.append(r)
+    if edited and os.path.basename(edited).lower() == "task_backlog.md" and root and store.is_project(root):
+        r = absorb_notes(root, rec.get("sg_id"), "TASK_BACKLOG.md", render.ADD_IDEA.lower())
+        if r:
+            extra.append(r)
+        else:
+            with core.FileLock(store.lock_path(root)):
+                render.render_backlog(root, store.load(root))  # the backlog is generated: a hand edit is undone
     if edited and root and core.key(edited) == core.key(os.path.join(root, "CLAUDE.md")) and store.is_project(root):
         text = core.read_text(edited)
         if text and render.tidy(text) != text:

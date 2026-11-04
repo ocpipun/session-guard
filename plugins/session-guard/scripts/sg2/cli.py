@@ -66,6 +66,14 @@ def cmd_task(a):
         data = store.load(root)
         out(show_task(data, store.task(data, a.id)))
         return 0
+    if a.action == "check":
+        data = store.load(root)
+        normal, urgent = store.main_counts(data)
+        out("active %d/%d (+urgent %d/%d) · queued %d/%d · ideas %d/%d" % (
+            normal, store.MAX_NORMAL, urgent, store.MAX_URGENT, store.queue_count(data), store.MAX_QUEUE,
+            store.idea_count(data), store.MAX_IDEAS))
+        out(store.related_text(store.similar(data, a.title, 0.45)) or "nothing related among tasks and ideas")
+        return 0
     sid = session_of(a)
     exp = a.expect_rev
     if a.action == "new":
@@ -462,8 +470,8 @@ def parser():
     common.add_argument("--expect-rev", type=int)
 
     t = sub.add_parser("task", parents=[common])
-    t.add_argument("action", choices=["list", "show", "new", "start", "claim", "note", "done", "cancel", "reopen",
-                                      "relate"])
+    t.add_argument("action", choices=["list", "show", "check", "new", "start", "claim", "note", "done", "cancel",
+                                      "reopen", "relate"])
     t.add_argument("--queue", action="store_true")
     t.add_argument("--rule")
     t.add_argument("--verified")

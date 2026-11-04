@@ -20,8 +20,8 @@ BEGIN = "<!-- SESSION-GUARD: 2.0 | sg-status:begin | generated from .claude/sess
         "with `sg` commands, not by hand -->"
 END_RE = re.compile(r"<!-- sg-status:end sha=([0-9a-f]{12}) -->")
 STATUS_HEAD = "# STATUS — %s\n\n"
-NOTES = ("\n## Notes\n<!-- SESSION-GUARD: 2.0 | a bullet written here becomes an idea with a temporary id (IDEA-xxx); "
-         "tasks and ideas are changed with `sg` commands -->\n")
+NOTES = "\n"  # no free section: ideas and queued tasks live in TASK_BACKLOG.md, so STATUS stays short
+ADD_IDEA = "## Add an idea"
 
 
 def doc(root, name):
@@ -75,19 +75,8 @@ def block_lines(data, compact=0):
                     lines.append("- %s %s · %s · owner %s" % (c["id"], c["title"], c["status"], _owner(data, c["owner"])))
         if t["related"] and compact < 2:
             lines.append("- Related: " + ", ".join("%s (%s)" % (r["task"], r["relation"]) for r in t["related"]))
-    queued = sorted((t for t in data["tasks"].values() if t["parent"] is None and t["status"] == store.QUEUED),
-                    key=lambda t: (t["priority"], store.sort_key(t["id"])))
-    lines += ["", "## Queue (%d/%d; start with `sg task start <id>`)" % (store.queue_count(data), store.MAX_QUEUE)]
-    items = ["%s · %s%s" % (t["id"], t["title"][:70], " · rule %s" % t["rule"] if t.get("rule") else "")
-             for t in queued]
-    lines += (["- " + "; ".join(i.split(" · ")[0] for i in items)] if compact and items else
-              ["- " + i for i in items] or ["- None"])
-    ideas = sorted((i for i in data["ideas"].values() if i["state"] == "waiting"), key=lambda i: i["id"])
-    lines += ["", "## Ideas (%d/%d; temporary ids, a task id replaces them)" % (store.idea_count(data),
-                                                                               store.MAX_IDEAS)]
-    items = ["%s · %s%s" % (i["id"], i["text"][:70], " · rule %s" % i["rule"] if i.get("rule") else "") for i in ideas]
-    lines += (["- " + "; ".join(i.split(" · ")[0] for i in items)] if compact and items else
-              ["- " + i for i in items] or ["- None"])
+    lines += ["", "## Waiting work", "- Queued tasks %d/%d · ideas %d/%d: docs/TASK_BACKLOG.md" % (
+        store.queue_count(data), store.MAX_QUEUE, store.idea_count(data), store.MAX_IDEAS)]
     waiting = sorted(store.waiting_handoffs(data), key=lambda t: store.sort_key(t["id"]))
     lines += ["", "## Hand-offs waiting (%d)" % len(waiting)]
     if not waiting:
@@ -206,15 +195,25 @@ def status_lines(root):
 
 
 def render_backlog(root, data):
+    """Waiting work, out of STATUS: queued tasks (max 10) and ideas (max 10, temporary ids). A bullet written under
+    "Add an idea" becomes an idea with an id at the next step."""
     from . import store
     lines = ["# TASK BACKLOG", "", "<!-- SESSION-GUARD: 2.0 | component: task-backlog | generated from the store: "
-             "add with `sg idea add`, start with `sg idea promote` (needs the user's approval) -->", "",
-             "## Waiting ideas %s" % SIGN]
+             "`sg task new --queue`, `sg task start`, `sg idea add`, `sg idea promote` (the user's approval) -->", "",
+             "## Queued tasks (%d/%d) %s" % (store.queue_count(data), store.MAX_QUEUE, SIGN)]
+    queued = sorted((t for t in data["tasks"].values() if t["status"] == store.QUEUED),
+                    key=lambda t: (t["priority"], store.sort_key(t["id"])))
+    lines += ["- %s · %s · %s%s%s" % (t["id"], t["priority"], t["title"], " · rule %s" % t["rule"] if t.get("rule")
+                                     else "", " · pre-2.0" if str(t.get("origin") or "").startswith("pre-2.0")
+                                     else "") for t in queued] or ["- None"]
+    lines += ["", "## Ideas (%d/%d; temporary ids: the task id replaces them) %s" % (store.idea_count(data),
+                                                                                    store.MAX_IDEAS, SIGN)]
     waiting = [i for i in sorted(data["ideas"].values(), key=lambda i: i["id"]) if i["state"] == "waiting"]
-    lines += ["- %s · %s · %s · %s" % (i["id"], i["added"][:10], i["by"], i["text"]) for i in waiting] or ["- None"]
-    queued = [t for t in sorted(data["tasks"].values(), key=lambda t: store.sort_key(t["id"])) if t["status"] == "queued"]
-    lines += ["", "## Queued tasks"] + (["- %s · %s · %s" % (t["id"], t["priority"], t["title"]) for t in queued]
-                                        or ["- None"])
+    lines += ["- %s · %s%s · %s" % (i["id"], i["text"], " · rule-review %s" % (i.get("rule") or "")
+                                    if i.get("source") == "rule-review" else "", i["added"][:10]) for i in waiting] \
+        or ["- None"]
+    lines += ["", ADD_IDEA, "<!-- write a bullet here: Session Guard gives it an idea id and checks it against the "
+              "existing work -->"]
     promoted = [i for i in data["ideas"].values() if i["state"] == "promoted"]
     if promoted:
         lines += ["", "## Promoted"] + ["- %s → %s" % (i["id"], i["task"]) for i in promoted]

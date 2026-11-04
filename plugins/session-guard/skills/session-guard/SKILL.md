@@ -45,8 +45,13 @@ Only on a Session Guard instruction or the user's request (250k is a notice only
   (active, urgent, queued, ideas, subtasks) before working.
 - Over a limit: do not take the work; tell the user to finish the waiting work first and to plan in a separate
   project (Session Guard guards session cost, not project planning).
-- `sg` lists related existing work for each new task or idea: check it for overlap, conflict or a bug the new work
-  could cause (finished and running tasks too) and warn the user in one line. A near copy is refused.
+- Every new work request, before taking it: `sg task check --title "<item>"` per item shows the limits and the
+  related running, queued and finished tasks and ideas. Overlap, conflict, contradiction or a bug the new work
+  could cause: warn the user in one line. A near copy is refused.
+- Queued tasks and ideas live in docs/TASK_BACKLOG.md (generated). A bullet written under its "## Add an idea"
+  heading, or under a "## Notes" heading of STATUS, becomes an idea with an id.
+- After you merge a pull request or a side branch: tell the user its side branch can be deleted on GitHub (it is
+  the project's branch, not Session Guard's), and that "Automatically delete head branches" does it by itself.
 
 ## Rule review (RULE REVIEW)
 When Session Guard lists new or changed CLAUDE.md rule lines:
@@ -63,8 +68,7 @@ rule otherwise only with the user's yes: `sg rules remove R-xxx --approval "<the
 
 ## STATUS and CLAUDE.md by section
 Edit both by section and id (heading, TASK-ID, IDEA-ID, R-ID), never by line number; delete a line completely.
-Session Guard removes empty lines and empty bullets an edit leaves behind. A bullet under STATUS "## Notes" becomes
-an idea with an id.
+Session Guard removes empty lines and empty bullets an edit leaves behind.
 
 ## Taking over
 `sg task show <id>` first: the "Work:" line says where the work is. A task on a side branch this checkout lacks

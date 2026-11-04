@@ -53,6 +53,11 @@ MESSAGES = {
                         "session-guard-executive, type: continue installation",
     "v1_still_installed": "Session Guard 1.x is still installed: 2.0 stays passive until the update finishes "
                           "(no double guard).",
+    "side_branches_merged": "Side branches merged into the default branch, safe to delete on GitHub: %(names)s. They "
+                            "hold the project's own work, not Session Guard's; git never deletes a merged branch by "
+                            "itself. Tip: GitHub repository Settings > General > Pull Requests > \"Automatically "
+                            "delete head branches\" deletes them after each merged pull request (a deleted one can be "
+                            "restored from its pull request).",
     "status_restored": "STATUS.md task block was edited by hand; Session Guard restored it from the task store.",
 }
 ENGLISH_ONLY = {"v1_still_installed"}

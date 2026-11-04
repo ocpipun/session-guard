@@ -169,8 +169,15 @@ push or pull request; `sg/*` branches are deleted by the user on GitHub (the clo
 - Rules by id: `rules.mark_reviewed` writes "<!-- R-xxx -->" at the end of each new rule line; the store keeps
   each id's reviewed text and state; a changed text is reviewed again. A rule-script task closes only with
   `--verified`, which removes its rule line (event "rule_replaced").
-- STATUS Notes: bullets under "## Notes" become ideas (source status-notes) after an edit of STATUS.md; refused
-  ones stay with the reason.
+- Waiting work (user decision 2026-11-04): queued tasks and ideas are rendered into TASK_BACKLOG.md only; the
+  STATUS block shows their counts. Bullets under "## Add an idea" (backlog) or "## Notes" (STATUS) become ideas
+  after an edit; refused ones stay with the reason; any other hand edit of the generated backlog is undone.
+  `sg task check --title` (similarity 0.45+) is run for every item of a new work request before it is taken.
+- Merged side branches: at session start (cloud, or a project using side branches) `git ls-remote` lists sg/*
+  branches contained in the remote default branch; the user is told (systemMessage) every session until they are
+  deleted, with the "Automatically delete head branches" tip (GitHub docs: admin setting under Settings > General >
+  Pull Requests; applies after pull request merges; a deleted head branch can be restored from the closed pull
+  request). Only commits present in the checkout can be compared.
 - Migration (revised 2026-11-04): files that only listed tasks are deleted whole, without a copy; task text inside
   other files is cut out ("remove_text"); imported items get pre-2.0 ids (PRE20-DONE-xxx, PRE20-IDEA-xxx; tasks keep
   TASK ids, marked "pre-2.0", because task ids form one sequence); the rest of the limits goes to "not_carried".

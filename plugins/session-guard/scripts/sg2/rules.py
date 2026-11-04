@@ -43,10 +43,11 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
 - LIMITS (Session Guard guards session cost, not project planning): at most 3 normal + 1 urgent active main
   tasks, 10 queued tasks (`sg task new --queue`, start with `sg task start <id>`) and 10 ideas (`sg idea add`,
   temporary id IDEA-xxx, replaced by the task id when promoted); one prompt can bring at most 24 (3+1+10+10).
-  Subtasks and rule-script work do not count. Split a multi-step prompt into this form yourself. Over the limits:
-  refuse, tell the user to finish the waiting work first, and to plan in a separate project. Before adding a task
-  or idea, `sg` lists related existing work: check it for overlap, conflict or a bug the new work could cause and
-  warn the user; a near copy is refused (never redo an idea twice).
+  Queued tasks and ideas live in docs/TASK_BACKLOG.md, not in STATUS. Subtasks and rule-script work do not count.
+  Split a multi-step prompt into this form yourself. Over the limits: refuse, tell the user to finish the waiting
+  work first, and to plan in a separate project. EVERY NEW WORK REQUEST: for each item run `sg task check --title
+  "..."` first (running, queued, finished tasks and ideas): overlap, conflict, contradiction or a bug the new work
+  could cause -> warn the user before taking it; a near copy is refused (never redo an idea twice).
 - TASKS: work only on a task you own. Continuing a task keeps its id (claim it: `sg task claim <id>`). A task owned
   by another active session is not yours: ask the user. A new active main task needs the user's approval
   (`--approval "<their words>"`); at most 3 normal main tasks, plus 1 urgent with a reason and approval when 3 are
@@ -55,7 +56,7 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
   old one. A finished subtask never finishes its parent.
 - STATUS: the task block of docs/STATUS.md is generated from the task store: never edit it by hand. When a step
   ends run `sg task note`, when a task is finished `sg task done` at once, not at session end. Free text goes
-  under "## Notes", and every bullet there becomes an idea with an id (STATUS.md stays at 50 lines or less).
+  nowhere else: a bullet written under a "## Notes" heading becomes an idea (STATUS.md stays at 50 lines or less).
   Work by section (its heading, TASK-ID or IDEA-ID), never by line number: delete a line completely, leave no
   empty line or empty bullet (Session Guard removes them). A rule lives only in CLAUDE.md, a task or state only in
   the task store / STATUS: never the same line in both.
