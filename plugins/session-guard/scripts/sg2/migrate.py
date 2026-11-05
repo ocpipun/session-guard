@@ -39,7 +39,7 @@ TASK_HEADING = re.compile(r"^#{1,6}\s+.*(?:to-?do|backlog|pending|open|next|done
                           r"yapılacak|yapilacak|bekleyen|sıradaki|siradaki|tamamlan|biten|görev|gorev|fikir)", re.I | re.M)
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "Library", "Temp", "obj", "bin",
              ".next", "session-guard2"}
-SG_DOCS = ("docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md", "docs/COMPLETED_TASKS.md")
+SG_DOCS = ("docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md", "docs/IDEA_TASKS.md", "docs/COMPLETED_TASKS.md")
 
 
 def task_list_files(root, depth=3, limit=40):
@@ -285,8 +285,8 @@ PLAN_HELP = """Plan file (JSON), written by Claude after reading the survey and 
  "claude_md_remove": ["exact CLAUDE.md lines that are state or tasks, not rules (or repeat a task / STATUS line)"],
  "rule_scripts": [{"rule": "the exact CLAUDE.md rule line", "script": "what a script or hook would check"}],
  "contradictions": ["..."], "uncertain": ["..."], "sources": ["files and commits the plan rests on"]}
-At most 3 active tasks, 10 queued tasks and 10 ideas (rule_scripts not counted); the rest in "not_carried", shown to
-the user. Every open item of the survey's task_list_files becomes a task, a subtask, a queued task or an idea,
+At most 10 active tasks, 50 queued tasks and 50 ideas (rule_scripts not counted); the rest in "not_carried", shown
+to the user. Every open item of the survey's task_list_files becomes a task, a subtask, a queued task or an idea,
 every finished item a "completed" line (id PRE20-DONE-xxx; ideas get PRE20-IDEA-xxx, tasks are marked pre-2.0).
 Then a file that only listed tasks goes into "retire" (deleted whole), task text inside other files into
 "remove_text" (cut out), so no agent reads the old lists after the migration. A rule stays only in CLAUDE.md, a task or state line only in Session Guard's files: settle each
@@ -391,7 +391,7 @@ def apply(root, plan, migrator_session):
         report["warnings"].append("NOT A GIT REPOSITORY: no git rollback guarantee; only a file copy is kept")
     # A copy of every file this step changes, git or not (an uncommitted STATUS is not in the tag).
     bdir = backup_dir(root)
-    for rel in ("docs/STATUS.md", "docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md", "docs/COMPLETED_TASKS.md"):
+    for rel in ("docs/STATUS.md",) + SG_DOCS:
         p = core.exists_ci(root, rel)
         if p:
             os.makedirs(bdir, exist_ok=True)
@@ -466,7 +466,8 @@ def apply(root, plan, migrator_session):
         notes.append("File copies before migration: " + report["backup"])
     notes += ["Retired (only listed tasks; content moved into Session Guard's files): " + r for r in report["retired"]]
     notes += ["Task text cut out (moved into Session Guard's files): " + r for r in report["edited"]]
-    notes += ["Not carried over (limit 10 queued tasks / 10 ideas): %s" % c for c in plan.get("not_carried") or []]
+    notes += ["Not carried over (limit %d queued tasks / %d ideas): %s" % (store.MAX_QUEUE, store.MAX_IDEAS, c)
+              for c in plan.get("not_carried") or []]
     notes += ["Removed from CLAUDE.md (state, not a rule): " + r for r in report.get("claude_md_removed") or []]
     render.append_archive(root, "Migration to Session Guard 2.0 (%s)" % store.load(root)["project_id"], notes)
     pid = store.load(root)["project_id"]
@@ -495,8 +496,6 @@ def verify(root):
         problems.append("migrated_at not set: old sessions would not be locked")
     if not render.block_intact(root):
         problems.append("STATUS.md block missing or edited")
-    if render.status_lines(root) > render.STATUS_MAX_LINES:
-        problems.append("STATUS.md over %d lines" % render.STATUS_MAX_LINES)
     try:
         store.validate(data)
     except store.Refused as e:

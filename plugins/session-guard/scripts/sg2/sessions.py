@@ -34,7 +34,7 @@ def path_for(claude_id):
 def blank(claude_id):
     return {"signature": "SESSION-GUARD: 2.0", "claude_id": claude_id, "sg_id": None, "self": None, "root": None, "project_id": None,
             "born": None, "long": False, "locks": {}, "notified": [], "ids": [], "asked_at": 0, "stop_blocks": 0,
-            "place": core.place()}
+            "break_probe": None, "place": core.place()}
 
 
 def fix(rec, claude_id):
@@ -56,7 +56,9 @@ def load(claude_id, ids=()):
         for p in glob.glob(os.path.join(folder(), "*.json")):
             old = core.read_json(p)
             if isinstance(old, dict) and known & set(old.get("ids") or []):
-                return fix(old, claude_id), True
+                rec = fix(old, claude_id)
+                rec["continues"] = old.get("claude_id")  # not saved: fix() keeps only known fields
+                return rec, True
     return blank(claude_id), False
 
 

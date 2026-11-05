@@ -39,17 +39,38 @@ Only on a Session Guard instruction or the user's request (250k is a notice only
    session" step 2 ("finish session" is refused after this hand-off).
 
 ## Limits and new work
-- At most 3 normal + 1 urgent active main tasks, 10 queued (`sg task new --title ... --queue --approval "..."`,
-  `sg task start <id>`), 10 ideas (`sg idea add "..."`, temporary IDEA-xxx; `sg idea promote <id> [--queue]` gives
-  it a task id). Subtasks and rule-script work are not counted. A multi-step prompt: split it into this form
+- At most 10 normal and 3 urgent active main tasks per agent working in the project at the same time (+10 and
+  +3 for each further agent), 50 queued (`sg task new --title ... --queue --approval "..."`, `sg task start <id>`),
+  50 ideas (`sg idea add "..."`, temporary IDEA-xxx; `sg idea promote <id> [--queue]` gives it a task id).
+  Subtasks and rule-script work are not counted. A multi-step project or a bulk prompt: split it into this form
   (active, urgent, queued, ideas, subtasks) before working.
-- Over a limit: do not take the work; tell the user to finish the waiting work first and to plan in a separate
-  project (Session Guard guards session cost, not project planning).
-- Every new work request, before taking it: `sg task check --title "<item>"` per item shows the limits and the
-  related running, queued and finished tasks and ideas. Overlap, conflict, contradiction or a bug the new work
-  could cause: warn the user in one line. A near copy is refused.
-- Queued tasks and ideas live in docs/TASK_BACKLOG.md (generated). A bullet written under its "## Add an idea"
-  heading, or under a "## Notes" heading of STATUS, becomes an idea with an id.
+- Urgent (`--kind urgent --reason "..." --approval "..."`): listed first and belongs to its agent; while it is
+  active its owner takes no new task (new, queued, started or promoted): tell the user, record new requests as
+  ideas. Other agents go on.
+- Subagents: only a subtask of a task you own, opened first (`sg task new --parent <id>`) and named in the
+  prompt; never a new, independent task. Subagents and subtasks are not counted.
+- Child session agents (a new session started from yours): its brief carries `SG-PARENT: <your SESSION-ID> bound`
+  (it helps with your work, only subtasks of your tasks; id <your id>-B<n>) or `... independent` (its own main
+  tasks with the user's approval words, never your work; id <your id>-I<n>). The kinds never take each other's
+  work; a session that takes over your hand-off is a continuation, not a child.
+- Your hand-off with bound children: FIRST `sg handoff children`, send each NOT READY child the message it prints,
+  run it again until all are ready, only then write your hand-offs. A child that cannot answer: ask the user, then
+  `--children-gone "<the user's words>"`.
+- In a child: "PARENT SESSION ... HANDS OFF" (bound): stop, write the hand-off of every task you own, then
+  `sg handoff publish`; the session is locked after it. "PARENT SESSION ... STOPPED" (independent): per task you
+  own, finish the small step in progress, then `sg handoff write <id> --technical "..."` (branch and PR are
+  recorded; add `--pr <link>` if missing), then go on.
+- Over a limit: do not take that item; tell the user to finish or drop waiting work first.
+- New work (a bulk prompt at project start, or new tasks later), before taking any of it: ONE `sg task check
+  --title "<item 1>" --title "<item 2>" ...`. It shows the limits, every running, urgent, queued task and idea,
+  finished work sharing words with the new items (pre-2.0 items found by keywords) and near copies. Compare them
+  yourself; a near copy, overlap, conflict or contradiction: explain it plainly to the user in their language and
+  let them decide. A near copy is refused. Read no other file for this, not the archive.
+- Queued tasks live in docs/TASK_BACKLOG.md, ideas in docs/IDEA_TASKS.md: both generated, one section per id, a
+  hand edit is undone. A bullet written under the "## Add an idea" heading of IDEA_TASKS.md, or under a
+  "## Notes" heading of STATUS, becomes an idea with an id.
+- The archive: only when needed, by search: 2.0 entries by id (TASK-xxx, IDEA-xxx, R-xxx, S-...), pre-2.0
+  entries by keywords.
 - After you merge a pull request or a side branch: tell the user its side branch can be deleted on GitHub (it is
   the project's branch, not Session Guard's), and that "Automatically delete head branches" does it by itself.
 

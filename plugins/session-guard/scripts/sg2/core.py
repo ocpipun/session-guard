@@ -59,8 +59,9 @@ def to_time(stamp):
 
 # --- ids ----------------------------------------------------------------------------
 PROJECT_ID = re.compile(r"^PRJ-[0-9A-F]{8}$")
-SESSION_ID = re.compile(r"^S-\d{8}-[0-9a-f]{6}$")
+SESSION_ID = re.compile(r"^S-\d{8}-[0-9a-f]{6}(?:-[BI]\d+)*$")   # -B<n> / -I<n>: a bound / independent child session
 TASK_ID = re.compile(r"^TASK-\d{3,}(-\d+)*$")
+TASK_ID_ANY = re.compile(r"\bTASK-\d{3,}(?:-\d+)*\b")  # task ids inside a text (a subagent prompt)
 IDEA_ID = re.compile(r"^IDEA-\d{3,}$")
 
 

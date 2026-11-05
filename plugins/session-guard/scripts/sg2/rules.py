@@ -30,9 +30,9 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
   After the 300k hand-off (normal) or the 800k hand-off (long) Session Guard refuses "start long mode" and
   "finish session" itself; the hand-off is not written a second time, and the session measurement of
   "finish session" is done with that hand-off.
-- Break (normal mode): gap > 1 hour and context > 100k -> do NOT run the user's command and do no reading or
+- Break (normal mode): gap > 1 hour and context > 175k -> do NOT run the user's command and do no reading or
   research for it; hand off every task you own (Session Guard already stored the command word for word).
-  Context <= 100k -> remind in one line, then continue. Waiting for your own background job is not a break.
+  Context <= 175k -> remind in one line, then continue. Waiting for your own background job is not a break.
 - "finish session" (any mode): only hand-offs and session measurement, nothing else. Commands ("start long mode",
   "finish session", "continue installation") count only at the end of the message, or at its start followed by
   a comma or period. After a hard stop, a break hand-off, "finish session", a quota stop, a completed hand-over
@@ -40,23 +40,50 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
 - IDS: every project has a PROJECT-ID, every session a SESSION-ID (yours is given below and in $SG_SESSION_ID),
   every task a TASK-ID (TASK-001, subtasks TASK-001-1, TASK-001-2-1). Use `sg` (the command given below) for every
   task change; it checks ownership and writes under a lock, so parallel sessions never overwrite each other.
-- LIMITS (Session Guard guards session cost, not project planning): at most 3 normal + 1 urgent active main
-  tasks, 10 queued tasks (`sg task new --queue`, start with `sg task start <id>`) and 10 ideas (`sg idea add`,
-  temporary id IDEA-xxx, replaced by the task id when promoted); one prompt can bring at most 24 (3+1+10+10).
-  Queued tasks and ideas live in docs/TASK_BACKLOG.md, not in STATUS. Subtasks and rule-script work do not count.
-  Split a multi-step prompt into this form yourself. Over the limits: refuse, tell the user to finish the waiting
-  work first, and to plan in a separate project. EVERY NEW WORK REQUEST: for each item run `sg task check --title
-  "..."` first (running, queued, finished tasks and ideas): overlap, conflict, contradiction or a bug the new work
-  could cause -> warn the user before taking it; a near copy is refused (never redo an idea twice).
+- LIMITS: at most 10 normal and 3 urgent active main tasks for each agent working in the project at the same time
+  (each session owning an active task adds 10 + 3: two agents 20 + 6); 50 queued tasks (`sg task new
+  --queue`, start with `sg task start <id>`) in docs/TASK_BACKLOG.md; 50 ideas (`sg idea add`, temporary id
+  IDEA-xxx, replaced by the task id when promoted) in docs/IDEA_TASKS.md. Subtasks and rule-script ideas do not
+  count. A multi-step project or a bulk prompt is welcome: split it yourself into main tasks, subtasks, queued
+  tasks and ideas within these limits. Over a limit: refuse that item and tell the user to finish waiting work.
+- URGENT: an urgent task (`--kind urgent --reason "..." --approval "..."`) goes to the top of the list and
+  belongs to its agent: while it is active, its owner takes NO NEW TASK (no new or queued task, no `sg task start`,
+  no promotion) until it is finished; it tells the user and records new requests as ideas. Other agents go on.
+- NEW WORK CHECK: only when the user gives new work (a bulk prompt at project start, or new tasks later), run ONE
+  `sg task check --title "..." --title "..."` with every new item before taking any. It lists running, urgent,
+  queued tasks and ideas in full, finished work by keywords and near copies by wording. Compare them yourself: a
+  near copy, overlap, conflict or contradiction -> explain the problem plainly to the user in their language and
+  let them decide; never do the same work twice (a near copy is refused). Read no other file for it.
+- SUBAGENTS (Agent tool): a subagent works only on a subtask of a task you own. Open the subtask first (`sg task
+  new --parent <your TASK-ID>`) and name its id in the subagent's prompt (Session Guard refuses the launch
+  otherwise; web-fetch is exempt). Never hand a subagent a new, independent task: that needs the user's approval
+  and is yours, a queued task or an idea. A subagent opens, starts or claims no main task; it may note, hand off
+  (`sg handoff write <its subtask>`, with its branch / PR) and close its own subtask. Subagents are not agents for
+  the limits, and subtasks do not count.
+- CHILD SESSIONS: a session you start from yours (e.g. the desktop app's new sessions) is a child session agent,
+  a separate agent under every rule of a session, not a subagent. Its kind is fixed at its start: put the line
+  `SG-PARENT: <your SESSION-ID> bound` or `SG-PARENT: <your SESSION-ID> independent` in its brief.
+  BOUND (id <your id>-B<n>): helps with your work (a test, a part of it); it opens and takes only subtasks of your
+  tasks. Before your hand-off run `sg handoff children` and send each bound child the message it prints; write your
+  hand-off only when all are ready; they are locked with you.
+  INDEPENDENT (id <your id>-I<n>, the user's approval words in its brief): its own main tasks, never your work or
+  its subtasks; when you stop it is told, makes its work hand-off-ready and goes on.
+  The kinds never take each other's work. A session that takes over your hand-off is a continuation, not a child.
+- COMPACTION: when Claude Code compacts the conversation, Session Guard gives the rules and STATUS again and
+  measures the context anew; read your open tasks (`sg task show <id>`) before going on. A fork (/fork, /branch)
+  is a new session with the same mode and context; its tasks stay with the original unless the user says so.
+- READING: at session start CLAUDE.md and STATUS.md (given to you). For new work only the check above. The
+  archive only when really needed, by search (Grep), never whole: Session Guard 2.0 entries by id (TASK-xxx,
+  IDEA-xxx, R-xxx, S-...), pre-2.0 entries (no 2.0 id) by keywords.
 - TASKS: work only on a task you own. Continuing a task keeps its id (claim it: `sg task claim <id>`). A task owned
   by another active session is not yours: ask the user. A new active main task needs the user's approval
-  (`--approval "<their words>"`); at most 3 normal main tasks, plus 1 urgent with a reason and approval when 3 are
-  full. Subtasks are free. Unrelated work goes to the backlog (`sg idea add`), not into a new task. Redoing a task
-  finished wrongly, or adding a feature to a finished one, is a NEW task (`sg task reopen <id>`), linked to the
-  old one. A finished subtask never finishes its parent.
+  (`--approval "<their words>"`). Subtasks are free. Unrelated work goes to the ideas (`sg idea add`), not into
+  a new task. Redoing a task finished wrongly, or adding a feature to a finished one, is a NEW task (`sg task
+  reopen <id>`), linked to the old one. A finished subtask never finishes its parent.
 - STATUS: the task block of docs/STATUS.md is generated from the task store: never edit it by hand. When a step
   ends run `sg task note`, when a task is finished `sg task done` at once, not at session end. Free text goes
-  nowhere else: a bullet written under a "## Notes" heading becomes an idea (STATUS.md stays at 50 lines or less).
+  nowhere else: a bullet written under a "## Notes" heading becomes an idea. STATUS has no line limit: the work
+  limits are task counts (see LIMITS).
   Work by section (its heading, TASK-ID or IDEA-ID), never by line number: delete a line completely, leave no
   empty line or empty bullet (Session Guard removes them). A rule lives only in CLAUDE.md, a task or state only in
   the task store / STATUS: never the same line in both.
@@ -94,13 +121,14 @@ GENERAL_RULES = """# Session Guard 2.0 general rules (SESSION-GUARD: 2.0)
 
 ## Project files
 - `CLAUDE.md` permanent rules and decisions; `docs/STATUS.md` current state (task block generated by Session
-  Guard, at most 50 lines); `docs/STATUS_ARCHIVE.md` history (append only, searched, never read whole);
-  `docs/TASK_BACKLOG.md` waiting ideas; `docs/COMPLETED_TASKS.md` one line per finished task.
+  Guard; no line limit, the limits are task counts); `docs/STATUS_ARCHIVE.md` history (append only, searched, never read whole);
+  `docs/TASK_BACKLOG.md` queued tasks; `docs/IDEA_TASKS.md` ideas; `docs/COMPLETED_TASKS.md` one line per
+  finished task. Backlog and ideas are generated, one section per id: change them by id, never by line number.
 - Tasks change only through `sg` commands (ownership, lock, ids). No separate hand-off files, no second archive.
 - Update the task when a step ends, before long work, on an error, while waiting for the user, before a break.
 
 ## Topics
-- Suggest a new conversation when the topic changes, whatever the token count. Unrelated work goes to the backlog.
+- Suggest a new conversation when the topic changes, whatever the token count. Unrelated work goes to the ideas.
 
 ## Tools and permissions
 - Ask for screen, app and similar permissions right before the action that needs them, not at session start.

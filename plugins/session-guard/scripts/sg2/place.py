@@ -142,7 +142,7 @@ def copy_hooks():
     c = lambda a="", **kw: dict({"type": "command", "command": copy_command(a), "timeout": 10}, **kw)
     return [("SessionStart", None, c()), ("UserPromptSubmit", None, c()),
             ("UserPromptSubmit", None, c(" --watch", timeout=90000, **{"async": True, "asyncRewake": True})),
-            ("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", c()), ("PostToolUse", "*", c()),
+            ("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit|Agent|Task|Bash", c()), ("PostToolUse", "*", c()),
             ("Stop", None, c()), ("SessionEnd", None, c(timeout=2))]
 
 

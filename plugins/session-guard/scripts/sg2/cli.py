@@ -7,7 +7,7 @@ import os
 import re
 import sys
 
-from . import SG_VERSION, core, gitops, legacy, manifest, messages, migrate, place, render, rules, store
+from . import SG_VERSION, core, gitops, legacy, manifest, measure, messages, migrate, place, render, rules, store
 
 ENTRY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "session_guard.py")
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,7 +28,7 @@ def session_of(args):
     sid = getattr(args, "session", None) or os.environ.get("SG_SESSION_ID")
     if not sid or not core.SESSION_ID.match(sid):
         raise store.Refused("no SESSION-ID: pass --session S-YYYYMMDD-xxxxxx (given at session start)")
-    return sid
+    return store.resolve(store.load(root_of(args)), sid)
 
 
 def show_task(data, t):
@@ -46,6 +46,70 @@ def show_task(data, t):
         lines.append(render.work_line(t["work"]))
     if t.get("pending_user_command"):
         lines.append("user command waiting (word for word): " + t["pending_user_command"])
+    return "\n".join(lines)
+
+
+PRE20_DONE = re.compile(r"\b(PRE20-DONE-\d{3,})\b")
+
+
+def check(root, data, titles, sid=None):
+    """NEW WORK CHECK, run once when the user gives new work (a bulk prompt or new tasks): every running, urgent,
+    queued task and idea in full, finished work found by keywords (2.0 tasks from the store; pre-2.0 items, which
+    have no 2.0 id, from COMPLETED_TASKS.md), and near copies by wording. Claude compares them itself and explains
+    any overlap, conflict, contradiction or near copy to the user. No other file is read for it (not the archive)."""
+    if not data:
+        raise store.Refused("not a 2.0 project: " + root)
+    titles = [t.strip() for t in titles if t and t.strip()]
+    if not titles:
+        raise store.Refused("give every new item: --title \"...\" --title \"...\"")
+    normal, urgent = store.main_counts(data)
+    n = store.agents(data, sid)
+    lines = ["limits (%d agent%s: %d normal + %d urgent each): active normal %d/%d · urgent %d/%d · queued %d/%d · "
+             "ideas %d/%d" % (n, "" if n == 1 else "s", store.MAX_NORMAL, store.MAX_URGENT, normal,
+                              store.normal_limit(data, sid), urgent, store.urgent_limit(data, sid),
+                              store.queue_count(data), store.MAX_QUEUE, store.idea_count(data), store.MAX_IDEAS)]
+    busy = store.urgent_open(data, sid) if sid else []
+    if busy:
+        lines.append("YOUR URGENT TASK IS ACTIVE (%s): you take no new task until it is finished; new items can "
+                     "only be recorded as ideas. Tell the user." % ", ".join(busy))
+    lines.append("NEW ITEMS (wording checked against every task and idea):")
+    for title in titles:
+        found, parts = store.similar(data, title, 0.45), []
+        if found and found[0][0] >= 0.85:
+            sc, iid, kind, state, text = found.pop(0)
+            parts.append("NEAR COPY of %s (%s, %s) \"%s\": not taken again unless the user says it is new" % (
+                iid, kind, state, text[:60]))
+        if found:
+            parts.append("close: " + "; ".join("%s (%s, %s)" % (i, s, sc) for sc, i, k, s, t in found))
+        lines.append("- \"%s\": %s" % (title[:80], " · ".join(parts) or "nothing close by wording"))
+    tasks = sorted(data["tasks"].values(), key=lambda t: (t["kind"] != "urgent", store.sort_key(t["id"])))
+    running = [t for t in tasks if t["status"] in store.ACTIVE]
+    lines.append("RUNNING (%d, subtasks indented):" % len(running))
+    lines += ["%s- %s · %s · %s%s" % ("  " * t["id"].count("-", 5), t["id"], t["title"], t["status"],
+                                      " · URGENT" if t["kind"] == "urgent" else "") for t in running] or ["- none"]
+    queued = [t for t in tasks if t["status"] == store.QUEUED]
+    lines.append("QUEUED (%d, docs/TASK_BACKLOG.md):" % len(queued))
+    lines += ["- %s · %s · %s" % (t["id"], t["priority"], t["title"]) for t in queued] or ["- none"]
+    ideas = sorted((i for i in data["ideas"].values() if i["state"] == "waiting"), key=lambda i: i["id"])
+    lines.append("IDEAS (%d, docs/IDEA_TASKS.md):" % len(ideas))
+    lines += ["- %s · %s" % (i["id"], i["text"]) for i in ideas] or ["- none"]
+    finished = [(t["id"], "%s · %s · %s" % (t["id"], t["title"], t["status"])) for t in tasks
+                if t["status"] in store.CLOSED]
+    for line in (core.read_text(render.doc(root, "COMPLETED_TASKS.md")) or "").splitlines():
+        m = PRE20_DONE.search(line)
+        if m:
+            finished.append((m.group(1), "%s · %s" % (m.group(1), line[m.end():].strip(" ·")[:120])))
+    hits, more = store.word_hits(titles, finished)
+    close = {f[1] for t in titles for f in store.similar(data, t, 0.45)}
+    shown = {iid for _, iid, _ in hits}
+    extra = [(0, iid, line) for iid, line in finished if iid in close and iid not in shown]
+    lines.append("FINISHED sharing words with the new items (%d of %d finished%s):" % (
+        len(hits) + len(extra), len(finished), "; %d more matches: search docs/COMPLETED_TASKS.md" % more if more
+        else ""))
+    lines += ["- " + line for _, _, line in extra + hits] or ["- none"]
+    lines.append("Compare each new item with all of the above yourself: a near copy, overlap, conflict or "
+                 "contradiction -> explain it to the user plainly in their language before taking the work. Never "
+                 "do the same work twice. The archive is not part of this check.")
     return "\n".join(lines)
 
 
@@ -68,11 +132,8 @@ def cmd_task(a):
         return 0
     if a.action == "check":
         data = store.load(root)
-        normal, urgent = store.main_counts(data)
-        out("active %d/%d (+urgent %d/%d) · queued %d/%d · ideas %d/%d" % (
-            normal, store.MAX_NORMAL, urgent, store.MAX_URGENT, store.queue_count(data), store.MAX_QUEUE,
-            store.idea_count(data), store.MAX_IDEAS))
-        out(store.related_text(store.similar(data, a.title, 0.45)) or "nothing related among tasks and ideas")
+        out(check(root, data, a.titles or [], store.resolve(data, getattr(a, "session", None) or
+                                                              os.environ.get("SG_SESSION_ID"))))
         return 0
     sid = session_of(a)
     exp = a.expect_rev
@@ -170,7 +231,7 @@ def save_work(root, data, sid, a):
 
 
 AUTO_MERGE = (".claude/session-guard2/store.json", ".claude/session-guard2/.gitignore", "docs/STATUS.md",
-              "docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md", "docs/COMPLETED_TASKS.md")
+              "docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md", "docs/IDEA_TASKS.md", "docs/COMPLETED_TASKS.md")
 
 
 def union_lines(ours, theirs):
@@ -216,7 +277,7 @@ def adopt(root, sid, branch):
             elif f.endswith(("STATUS_ARCHIVE.md", "COMPLETED_TASKS.md", ".gitignore")):
                 text = union_lines(ours, theirs)
             else:
-                text = ours  # STATUS.md and TASK_BACKLOG.md are rebuilt from the merged store below
+                text = ours  # STATUS.md, TASK_BACKLOG.md and IDEA_TASKS.md are rebuilt from the merged store below
             core.write_text(os.path.join(root, f), text)
             gitops.git(root, "add", "--", f)
         rc, _, err = gitops.git(root, "commit", "--no-edit")
@@ -228,6 +289,7 @@ def adopt(root, sid, branch):
         with core.FileLock(store.lock_path(root)):
             render.render_status(root, data)
             render.render_backlog(root, data)
+            render.render_ideas(root, data)
         gitops.commit_paths(root, "Session Guard 2.0: STATUS after taking over %s\n\nSESSION-GUARD: 2.0" % branch)
     return data
 
@@ -270,6 +332,28 @@ def cmd_handoff(a):
         out("merged %s: its work and hand-off are in this checkout. Hand-offs waiting: %s. Read one with `sg task "
             "show <id>`, then `sg task claim <id>`." % (a.id, ", ".join(waiting) or "none"))
         return 0
+    if a.action == "children":
+        rows = store.mutate(root, lambda d: (store.start_handoff(d, sid), [
+            (c, k) for c, k in store.children_of(d, sid) if k != "bound"]), render=False)
+        bound, free = rows
+        if not bound and not free:
+            out("no child session agents: write your hand-offs now")
+            return 0
+        for c, miss in bound:
+            out("BOUND %s: %s" % (c, "ready (all hand-offs written)" if not miss else
+                                   "NOT READY, hand-off missing for %s" % ", ".join(miss)))
+        for c, _ in free:
+            out("%s %s: goes on; only tell it" % (_.upper(), c))
+        if any(miss for _, miss in bound):
+            out("Send each NOT READY session this message (SendMessage to it; find it with list_sessions linked / "
+                "ListAgents): \"PARENT HANDING OFF (%s): write the hand-off of every task you own now; your session "
+                "is locked after it.\" Then run `sg handoff children` again until all are ready, and only then "
+                "write your hand-offs." % sid)
+        else:
+            out("all bound child session agents are ready: write your hand-offs now")
+        if free:
+            out("Tell each INDEPENDENT / IDLE session in one message that %s is handing off (it goes on)." % sid)
+        return 0
     if a.action == "write":
         if not a.id or not core.TASK_ID.match(a.id):
             raise store.Refused("give a TASK-ID")
@@ -283,7 +367,7 @@ def cmd_handoff(a):
         def change(d):
             store.set_work(d, sid, a.id, work)
             return store.handoff(d, sid, a.id, a.technical, done=a.done or [], pending=a.pending or [],
-                                 developer=a.developer, branch=br, pr=pr)
+                                 developer=a.developer, branch=br, pr=pr, children_gone=a.children_gone)
         r = store.mutate(root, change)
         where = ("side branch %s (pushed by `handoff publish`; %d files committed)" % (work["branch"], len(work["files"]))
                  if work["mode"] == "side-branch" else "this folder (%d uncommitted files listed)" %
@@ -476,7 +560,7 @@ def parser():
     t.add_argument("--rule")
     t.add_argument("--verified")
     t.add_argument("id", nargs="?")
-    t.add_argument("--title")
+    t.add_argument("--title", dest="titles", action="append")  # `check` takes several; the others the last one
     t.add_argument("--kind", default="normal")
     t.add_argument("--priority")
     t.add_argument("--parent")
@@ -509,7 +593,8 @@ def parser():
     u.add_argument("--approval")
 
     h = sub.add_parser("handoff", parents=[common])
-    h.add_argument("action", choices=["write", "publish", "adopt"])
+    h.add_argument("action", choices=["children", "write", "publish", "adopt"])
+    h.add_argument("--children-gone")
     h.add_argument("id", nargs="?")
     h.add_argument("--paths", nargs="+")
     h.add_argument("--no-files", action="store_true")
@@ -543,11 +628,37 @@ def parser():
 
     r = sub.add_parser("report")
     r.add_argument("path", nargs="?")
+
+    v = sub.add_parser("breaks")
+    v.add_argument("action", choices=["on", "off", "show"])
     return p
+
+
+def cmd_breaks(a):
+    """The break measurement (off by default, for the whole computer, can be turned off again): readings stay on
+    this computer."""
+    if a.action != "show":
+        measure.set_probe(a.action == "on")
+        out("break measurement %s for every session on this computer (%s)" % (a.action.upper(), measure.options_path()))
+        return 0
+    rows = measure.probe_rows()
+    pct = lambda snap, n: "%s%%" % snap[n]["percent"] if (snap or {}).get(n) else "n/a"
+    out("break measurement: %s; %d rows in %s" % ("ON" if measure.probe_on() else "OFF (or not the desktop app)",
+                                                 len(rows), measure.probe_path()))
+    out("date | gap min | context | mode | rule | 5-hour before > 1st > 2nd | weekly before > 1st > 2nd")
+    for r in rows:
+        b, after = r.get("before"), (r.get("after") or []) + [None, None]
+        out("%s | %s | %s | %s | %s | %s > %s > %s | %s > %s > %s" % (
+            (r.get("at") or "")[:16], r.get("gap_min"), measure.kfmt(r.get("context")), r.get("mode"), r.get("rule"),
+            pct(b, "five_hour"), pct(after[0], "five_hour"), pct(after[1], "five_hour"),
+            pct(b, "weekly"), pct(after[0], "weekly"), pct(after[1], "weekly")))
+    return 0
 
 
 def run(argv):
     a = parser().parse_args(argv)
+    if a.cmd == "task":
+        a.title = a.titles[-1] if a.titles else None
     if a.cmd == "task" and a.action == "new" and not a.priority:
         a.priority = "P2"
     if a.cmd == "task" and a.action == "reopen" and a.relation not in ("reopens", "extends"):
@@ -574,6 +685,8 @@ def run(argv):
             return cmd_manifest(a)
         if a.cmd == "report":
             return report(a.path)
+        if a.cmd == "breaks":
+            return cmd_breaks(a)
     except (store.Refused, core.Busy) as e:
         out("REFUSED: %s" % e)
         return 1

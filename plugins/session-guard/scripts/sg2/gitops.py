@@ -9,7 +9,7 @@ import re
 import subprocess
 
 SG_PATHS = (".claude/session-guard2", "docs/STATUS.md", "docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md",
-            "docs/COMPLETED_TASKS.md", "CLAUDE.md", ".claude/settings.json")
+            "docs/IDEA_TASKS.md", "docs/COMPLETED_TASKS.md", "CLAUDE.md", ".claude/settings.json")
 
 
 def git(root, *args, timeout=120, strip=True):

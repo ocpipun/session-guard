@@ -30,8 +30,10 @@ start per project only after its migration is verified.
 ## 3. Task rules (enforced in code, tested)
 - Owner only changes a task; claiming is free when there is no owner, the owner ended or is locked, or a hand-off
   waits; an active owner keeps it unless the user approves a takeover. Owner history is never deleted.
-- At most 3 normal + 1 urgent (reason + approval, only when 3 normal are active) main tasks; setup and migration
-  tasks exempt; subtasks unlimited. A new main task needs the user's approval text; unrelated work → backlog.
+- At most 10 normal and 3 urgent main tasks per working agent (active sessions owning an active main task, plus
+  the asking one; subagents are not agents) (urgent: reason + approval, listed first; while one is active no new, queued, started or promoted
+  task); setup and migration tasks exempt; subtasks unlimited. A new main task needs the user's approval text;
+  unrelated work → ideas.
 - A subtask closing never closes its parent; a parent with open subtasks closes only with `--force`.
 - Redo/extension of a finished task = new id with `reopens`/`extends` link both ways.
 - Concurrency: one O_EXCL lock file per store, fresh read inside the lock, validation, revision + atomic replace;
@@ -68,7 +70,8 @@ side branch name.
 | Component | Verdict | Note |
 |---|---|---|
 | Context measurement, thresholds, long mode | REUSED, CHANGED | numbers kept; hand-off per task; long mode hands off at 800k (1.4: 700k while work went on); after the 300k/800k hand-off "start long mode" and "finish session" are refused (user decision 2026-11-03: no second, stale hand-off of one session) |
-| Break rule | REUSED, CHANGED | the hook itself stores the user's command word for word in each owned task |
+| Break rule | REUSED, CHANGED | the hook itself stores the user's command word for word in each owned task; lock over 175k (was 100k, user decision 2026-11-05: a fresh session starts near 78k); decided by the mode before the message, so "start long mode" cannot skip it (v1.4 bug) |
+| Break measurement | NEW | off by default, for the whole computer (every session and project); `sg breaks on` / `sg breaks off` write ~/.claude/session_guard_v2/options.json; after a gap over 1 hour Claude reads the quota twice in that turn; with the last reading before the break one row goes to break_measurements.jsonl on that computer (nothing is sent); `sg breaks show` shows them; in README. UNVERIFIED: whether the first reading already includes the turn's first request |
 | Quota (Session Follow) | DIRECTLY REUSED | same thresholds; state moved to `session_guard_v2/follow` |
 | Session lock types | REUSED, EXTENDED | + handed, legacy, home |
 | Reopened conversation by message ids | DIRECTLY REUSED | |
@@ -161,18 +164,50 @@ push or pull request; `sg/*` branches are deleted by the user on GitHub (the clo
 - Rule review: the store keeps the reviewed CLAUDE.md rule lines (`rule_review`, set at migration from the plan's
   `rule_scripts`). New or changed lines trigger one RULE REVIEW request (session start, or right after an edit of
   CLAUDE.md): Claude proposes a script or hook per enforceable rule as a backlog idea, then `sg rules reviewed`.
-- Limits (user decision 2026-11-04): 3+1 active, 10 queued (status "queued", `sg task start`), 10 waiting ideas
-  (temporary IDEA ids, the task id replaces them on promotion); rule-script tasks and rule-review ideas, subtasks,
-  setup and migration not counted. Over a limit `sg` refuses and tells Claude to send the user to the waiting work
-  or to a separate planning project. New tasks and ideas are compared (difflib) with all tasks and ideas: 0.85+
-  refused as a copy, 0.6+ listed for a conflict / bug check.
+- Limits (user decisions 2026-11-04): 10 normal + 3 urgent active per working agent, 50
+  queued (status "queued", `sg task start`), 50 waiting ideas (temporary IDEA ids, the task id replaces them on
+  promotion); rule-script tasks and rule-review ideas, subtasks, setup and migration not counted. The per-agent
+  limit is checked when a task is created or started, not in validate(), so a session ending never blocks the
+  store. Over a limit `sg` refuses and tells Claude to send the user to the waiting work. New tasks and ideas
+  are compared (difflib) with all tasks and ideas: 0.85+ refused as a copy, 0.45+ listed for a conflict check.
 - Rules by id: `rules.mark_reviewed` writes "<!-- R-xxx -->" at the end of each new rule line; the store keeps
   each id's reviewed text and state; a changed text is reviewed again. A rule-script task closes only with
   `--verified`, which removes its rule line (event "rule_replaced").
-- Waiting work (user decision 2026-11-04): queued tasks and ideas are rendered into TASK_BACKLOG.md only; the
-  STATUS block shows their counts. Bullets under "## Add an idea" (backlog) or "## Notes" (STATUS) become ideas
-  after an edit; refused ones stay with the reason; any other hand edit of the generated backlog is undone.
-  `sg task check --title` (similarity 0.45+) is run for every item of a new work request before it is taken.
+- Waiting work (user decisions 2026-11-04): queued tasks are rendered into TASK_BACKLOG.md, ideas into
+  IDEA_TASKS.md, one heading per id; the STATUS block shows their counts. Bullets under "## Add an idea"
+  (IDEA_TASKS.md) or "## Notes" (STATUS) become ideas after an edit; refused ones stay with the reason; any
+  other hand edit of the two generated files is undone.
+- Subagents (user decision 2026-11-04): PreToolUse on Agent/Task denies a launch whose prompt names no active
+  subtask (TASK-xxx-n) owned by the session (web-fetch exempt); PreToolUse on Bash denies `task new` without
+  `--parent`, `task start|claim|reopen` and `idea promote` when the input carries `agent_id` (documented: hooks
+  run inside subagents with agent_id / agent_type). Sessions started from a session register on their own and are
+  not locked with it: each session has its own record and lock (the store's parent/children fields only link).
+- Urgent belongs to its agent (user decision 2026-11-04): only the owner of an active urgent task is refused new,
+  queued, started or promoted tasks; other agents go on.
+- Child session agents (user decisions 2026-11-04): a brief line "SG-PARENT: <id> bound|independent" in a new
+  session's prompt renames it, before it owns anything, to <parent>-B<n> or <parent>-I<n> (store.make_child; the
+  kind is stored as sessions[sid].kind; the first id stays an alias, resolved by `sg`, so $SG_SESSION_ID keeps
+  working) and links it. A line without the kind makes no child. store._kind_allows keeps the kinds apart: a
+  bound child opens and takes only subtasks of work owned (now or before) by a session above it; an independent
+  one never takes that work or its subtasks. A session linked by claiming a hand-off has no kind: a continuation.
+  A permanent lock (context, finish, break) is mirrored as sessions[sid].stopped in the store (it blocks nothing).
+  The parent's hand-off waits for its bound children (`sg handoff children` lists them and the message to send;
+  store.handoff refuses until their hand-offs exist, or --children-gone with the user's words); a bound child
+  gets "PARENT SESSION ... HANDS OFF", writes its hand-offs and is locked. An independent child gets "PARENT
+  SESSION ... STOPPED" once: make the work hand-off-ready, then go on. Each session is its own process (measured:
+  one process record per session), so a parent's hook block cannot stop a child.
+  UNVERIFIED (not in the desktop docs): whether a child's report reaches a locked parent.
+- Compaction (measured 2026-11-04 on a real transcript: auto compaction 345k -> 22.5k, the next measurement 94k):
+  the context is the last main reply's input usage, so a compacted conversation is measured as it is now.
+  SessionStart source "compact" (documented) re-arms the one-time notices and adds a COMPACTED note; source "fork"
+  with a record found through shared message ids gets a new SESSION-ID linked to the original and keeps its mode,
+  notices and locks (under v1.4 a long-mode conversation continued under a new session id started in normal
+  mode and was hard-stopped at 558k; how the app created that id is not known).
+- New work check: `sg task check --title ... --title ...` once per new work request (bulk prompt or new tasks):
+  limits, every running / urgent / queued task and idea in full, finished work by shared keywords (5-letter stems,
+  so Turkish endings match; 2.0 tasks from the store, pre-2.0 PRE20-DONE lines from COMPLETED_TASKS.md), near
+  copies by wording. Claude judges overlap, conflict and contradiction and explains them to the user. The archive
+  is not part of it: searched only when needed, 2.0 entries by id, pre-2.0 entries by keywords.
 - Merged side branches: at session start (cloud, or a project using side branches) `git ls-remote` lists sg/*
   branches contained in the remote default branch; the user is told (systemMessage) every session until they are
   deleted, with the "Automatically delete head branches" tip (GitHub docs: admin setting under Settings > General >

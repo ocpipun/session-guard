@@ -3,7 +3,7 @@
 
     python session_guard.py                      a hook event (SessionStart, UserPromptSubmit, PreToolUse,
                                                  PostToolUse, Stop, SessionEnd); --watch = the 24-hour watch
-    python session_guard.py task|idea|handoff|migrate|install|manifest|report ...   commands (see --help)
+    python session_guard.py task|idea|handoff|migrate|install|manifest|report|breaks ...   commands (see --help)
     --project                                    repository copy mode (cloud)
 The file keeps the 1.x name on purpose (see sg2/legacy.py). Hooks run with python -I, which leaves the script's
 folder off sys.path, so it is added here.
@@ -17,7 +17,7 @@ sys.path.insert(0, HERE)
 
 from sg2 import cli, core, hooks, place  # noqa: E402
 
-COMMANDS = ("task", "idea", "rules", "handoff", "migrate", "install", "manifest", "report", "-h", "--help")
+COMMANDS = ("task", "idea", "rules", "handoff", "migrate", "install", "manifest", "report", "breaks", "-h", "--help")
 
 
 def main():

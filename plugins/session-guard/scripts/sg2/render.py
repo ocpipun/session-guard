@@ -3,7 +3,9 @@
 
 docs/STATUS.md          the generated block (project, active tasks, hand-offs) between markers; text outside the
                         block (a "Notes" section) is the project's own and is kept
-docs/TASK_BACKLOG.md    generated in full from the ideas
+docs/TASK_BACKLOG.md    generated in full from the queued tasks, one section per TASK-ID
+docs/IDEA_TASKS.md      generated in full from the ideas, one section per IDEA-ID; bullets under "Add an idea" are
+                        the only hand-written part (they become ideas)
 docs/COMPLETED_TASKS.md one appended line per finished task
 docs/STATUS_ARCHIVE.md  appended only (claimed hand-offs, locks, migration records); never rewritten, so a large
                         archive is never loaded or written in one go
@@ -14,13 +16,14 @@ import re
 
 from . import core
 
-STATUS_MAX_LINES = 50
+STATUS_VIEW_LINES = 50  # a longer block gets a shorter view (fewer tokens at session start); never a limit on work:
+                        # the work limits are task counts (store.MAX_NORMAL per agent, store.MAX_URGENT)
 SIGN = "[SESSION-GUARD: 2.0]"
 BEGIN = "<!-- SESSION-GUARD: 2.0 | sg-status:begin | generated from .claude/session-guard2/store.json: change it " \
         "with `sg` commands, not by hand -->"
 END_RE = re.compile(r"<!-- sg-status:end sha=([0-9a-f]{12}) -->")
 STATUS_HEAD = "# STATUS — %s\n\n"
-NOTES = "\n"  # no free section: ideas and queued tasks live in TASK_BACKLOG.md, so STATUS stays short
+NOTES = "\n"  # no free section: queued tasks and ideas live in their own files, so STATUS stays short
 ADD_IDEA = "## Add an idea"
 
 
@@ -46,19 +49,23 @@ def _short(items, keep):
 
 
 def block_lines(data, compact=0):
-    """compact 0: full; 1: shorter lists; 2: one line per task."""
+    """compact 0: full; 1: shorter lists; 2: one line per task (a view, never a limit on work)."""
     from . import store
     normal, urgent = store.main_counts(data)
     lines = ["## Project %s" % SIGN,
              "- PROJECT-ID: %s · home: %s · store rev %d" % (data["project_id"], data["home"], data["rev"]),
-             "", "## Active tasks (normal %d/%d · urgent %d/%d)" % (normal, store.MAX_NORMAL, urgent, store.MAX_URGENT)]
+             "", "## Active tasks (normal %d/%d · urgent %d/%d)" % (normal, store.normal_limit(data), urgent,
+                                                                     store.urgent_limit(data))]
     mains = sorted((t for t in data["tasks"].values() if t["parent"] is None and t["status"] in store.ACTIVE),
-                   key=lambda t: (t["kind"] not in store.EXEMPT, t["priority"], store.sort_key(t["id"])))
+                   key=lambda t: (t["kind"] != "urgent", t["kind"] not in store.EXEMPT, t["priority"],
+                                  store.sort_key(t["id"])))
     if not mains:
         lines.append("- None")
+    if urgent:
+        lines.append("- URGENT FIRST: the owner of an urgent task takes no new task until it is finished.")
     keep = (3, 2, 0)[compact]
     for t in mains:
-        flag = " · ORPHANED (owner ended without hand-off)" if "orphaned" in t["flags"] else ""
+        flag =" · ORPHANED (owner ended without hand-off)" if "orphaned" in t["flags"] else ""
         flag += " · pre-2.0" if str(t.get("origin") or "").startswith("pre-2.0") else ""
         lines.append("### %s · %s · %s · %s%s · owner %s%s" % (
             t["id"], t["title"], t["status"], t["priority"], "" if t["kind"] == "normal" else " · " + t["kind"],
@@ -75,7 +82,7 @@ def block_lines(data, compact=0):
                     lines.append("- %s %s · %s · owner %s" % (c["id"], c["title"], c["status"], _owner(data, c["owner"])))
         if t["related"] and compact < 2:
             lines.append("- Related: " + ", ".join("%s (%s)" % (r["task"], r["relation"]) for r in t["related"]))
-    lines += ["", "## Waiting work", "- Queued tasks %d/%d · ideas %d/%d: docs/TASK_BACKLOG.md" % (
+    lines += ["", "## Waiting work", "- Queued tasks %d/%d: docs/TASK_BACKLOG.md · ideas %d/%d: docs/IDEA_TASKS.md" % (
         store.queue_count(data), store.MAX_QUEUE, store.idea_count(data), store.MAX_IDEAS)]
     waiting = sorted(store.waiting_handoffs(data), key=lambda t: store.sort_key(t["id"]))
     lines += ["", "## Hand-offs waiting (%d)" % len(waiting)]
@@ -104,7 +111,7 @@ def _descendants(data, tid):
 def compose_block(data, outside_lines):
     for compact in (0, 1, 2):
         body = "\n".join(block_lines(data, compact))
-        if len(body.splitlines()) + outside_lines + 3 <= STATUS_MAX_LINES:
+        if len(body.splitlines()) + outside_lines + 3 <= STATUS_VIEW_LINES:
             break
     return BEGIN + "\n" + body + "\n<!-- sg-status:end sha=%s -->" % _sha(body)
 
@@ -189,35 +196,67 @@ def render_status(root, data):
     return len(new.splitlines())
 
 
-def status_lines(root):
-    text = core.read_text(doc(root, "STATUS.md"))
-    return len(text.splitlines()) if text else 0
-
-
 def render_backlog(root, data):
-    """Waiting work, out of STATUS: queued tasks (max 10) and ideas (max 10, temporary ids). A bullet written under
-    "Add an idea" becomes an idea with an id at the next step."""
+    """Queued tasks (max 50), out of STATUS: one section per TASK-ID, generated from the store, so a task is changed
+    or removed by its id and never by line number; a hand edit is undone."""
     from . import store
-    lines = ["# TASK BACKLOG", "", "<!-- SESSION-GUARD: 2.0 | component: task-backlog | generated from the store: "
-             "`sg task new --queue`, `sg task start`, `sg idea add`, `sg idea promote` (the user's approval) -->", "",
+    lines = ["# TASK BACKLOG", "", "<!-- SESSION-GUARD: 2.0 | component: task-backlog | generated from the store, do "
+             "not edit: `sg task new --queue --approval`, `sg task start <id>`. Ideas: IDEA_TASKS.md -->", "",
              "## Queued tasks (%d/%d) %s" % (store.queue_count(data), store.MAX_QUEUE, SIGN)]
     queued = sorted((t for t in data["tasks"].values() if t["status"] == store.QUEUED),
                     key=lambda t: (t["priority"], store.sort_key(t["id"])))
-    lines += ["- %s · %s · %s%s%s" % (t["id"], t["priority"], t["title"], " · rule %s" % t["rule"] if t.get("rule")
-                                     else "", " · pre-2.0" if str(t.get("origin") or "").startswith("pre-2.0")
-                                     else "") for t in queued] or ["- None"]
-    lines += ["", "## Ideas (%d/%d; temporary ids: the task id replaces them) %s" % (store.idea_count(data),
-                                                                                    store.MAX_IDEAS, SIGN)]
-    waiting = [i for i in sorted(data["ideas"].values(), key=lambda i: i["id"]) if i["state"] == "waiting"]
-    lines += ["- %s · %s%s · %s" % (i["id"], i["text"], " · rule-review %s" % (i.get("rule") or "")
-                                    if i.get("source") == "rule-review" else "", i["added"][:10]) for i in waiting] \
-        or ["- None"]
-    lines += ["", ADD_IDEA, "<!-- write a bullet here: Session Guard gives it an idea id and checks it against the "
-              "existing work -->"]
-    promoted = [i for i in data["ideas"].values() if i["state"] == "promoted"]
-    if promoted:
-        lines += ["", "## Promoted"] + ["- %s → %s" % (i["id"], i["task"]) for i in promoted]
+    if not queued:
+        lines.append("- None")
+    for t in queued:
+        lines += ["", "### %s · %s · %s" % (t["id"], t["priority"], t["title"])]
+        lines += ["- Pending: " + "; ".join(t["pending"])] if t["pending"] else []
+        lines += ["- Done before: " + "; ".join(t["done"])] if t["done"] else []
+        extra = ["rule %s" % t["rule"]] if t.get("rule") else []
+        extra += ["pre-2.0"] if str(t.get("origin") or "").startswith("pre-2.0") else \
+            [t["origin"]] if t.get("origin") else []
+        lines += ["- Queued %s · %s" % (t["created"][:10], " · ".join(extra) or "approval: %s" % (t["approval"] or "-"))]
     core.write_text(doc(root, "TASK_BACKLOG.md"), "\n".join(lines) + "\n")
+
+
+def _hand_ideas(root):
+    """Bullets under "Add an idea" not taken yet (refused, or written while another session held the lock)."""
+    text = core.read_text(doc(root, "IDEA_TASKS.md")) or ""
+    out, inside = [], False
+    for line in text.splitlines():
+        if line.startswith("#"):
+            inside = line.strip().lower() == ADD_IDEA.lower()
+        elif inside and ITEM.match(line):
+            out.append(line.rstrip())
+    return out
+
+
+def render_ideas(root, data):
+    """Ideas (max 50, temporary ids IDEA-xxx: the task id replaces them), one section per IDEA-ID, generated from the
+    store. Only the bullets under "Add an idea" are written by hand; they become ideas at the next step."""
+    from . import store
+    lines = ["# IDEA TASKS", "", "<!-- SESSION-GUARD: 2.0 | component: idea-tasks | generated from the store, do not "
+             "edit: `sg idea add`, `sg idea promote <id> --approval` (the user's approval). Queued tasks: "
+             "TASK_BACKLOG.md -->", "",
+             "## Ideas (%d/%d) %s" % (store.idea_count(data), store.MAX_IDEAS, SIGN)]
+    waiting = [i for i in sorted(data["ideas"].values(), key=lambda i: i["id"]) if i["state"] == "waiting"]
+    ideas = [i for i in waiting if i.get("source") != "rule-review"]
+    rule_work = [i for i in waiting if i.get("source") == "rule-review"]
+    if not ideas:
+        lines.append("- None")
+    for i in ideas:
+        lines += ["", "### %s · %s" % (i["id"], i["text"]),
+                  "- Added %s by %s%s" % (i["added"][:10], i["by"], " · " + i["source"] if i.get("source") else "")]
+    if rule_work:
+        lines += ["", "## Rule review: scripts instead of rules (not counted) %s" % SIGN]
+        for i in rule_work:
+            lines += ["", "### %s · %s" % (i["id"], i["text"]), "- Rule %s · added %s" % (i.get("rule") or "-",
+                                                                                         i["added"][:10])]
+    promoted = sorted((i for i in data["ideas"].values() if i["state"] == "promoted"), key=lambda i: i["id"])
+    if promoted:
+        lines += ["", "## Promoted (idea id → task id)"] + ["- %s → %s" % (i["id"], i["task"]) for i in promoted]
+    lines += ["", ADD_IDEA, "<!-- write a bullet here: Session Guard gives it an idea id and checks it against the "
+              "existing work -->"] + _hand_ideas(root)  # last, so a bullet added at the end lands here
+    core.write_text(doc(root, "IDEA_TASKS.md"), "\n".join(lines) + "\n")
 
 
 COMPLETED_HEAD = ("# COMPLETED TASKS\n\n<!-- SESSION-GUARD: 2.0 | component: completed-tasks -->\nOne line per finished "
@@ -269,6 +308,9 @@ def handoff_lines(h):
             "Done: " + ("; ".join(h["done"]) or "-"), "Pending: " + ("; ".join(h["pending"]) or "-"),
             "Branch: %s · PR: %s" % (h.get("branch") or "-", h.get("pr") or "-"),
             "Technical: " + h["technical"], work_line(h.get("work")),
+            "Child session agents: " + ("; ".join("%s %s (tasks %s; their hand-offs: `sg task show <id>`)" % (
+                c["session"], c["kind"], ", ".join(c["tasks"]) or "none") for c in h.get("child_handoffs") or [])
+                                        or "none"),
             "User command (word for word): " + (h.get("user_command") or "none"),
             "Written %s · %s%s" % (h["created"], h["state"], " · push %s" % (h.get("push") or {}).get("commit", "")
                                    if h.get("push") else ""),
@@ -288,5 +330,6 @@ def after_change(root, data, events):
             append_archive(root, "Session %s locked" % ev[1], [ev[2]])
     render_status(root, data)
     render_backlog(root, data)
+    render_ideas(root, data)
     if not os.path.exists(doc(root, "COMPLETED_TASKS.md")):
         core.append_text(doc(root, "COMPLETED_TASKS.md"), COMPLETED_HEAD)

@@ -22,11 +22,10 @@ CLOSED = ("done", "cancelled")
 KINDS = ("normal", "urgent", "setup", "migration", "rule-script")
 EXEMPT = ("setup", "migration")
 PRIORITIES = ("P1", "P2", "P3")
-MAX_NORMAL, MAX_URGENT, MAX_MAIN = 3, 1, 4
-MAX_QUEUE, MAX_IDEAS = 10, 10   # waiting main tasks, waiting ideas; subtasks and rule-script work not counted
-LIMIT_TELL = ("Tell the user: Session Guard keeps at most 3 active (+1 urgent) main tasks, 10 queued tasks and 10 "
-              "ideas; it guards session cost, not project planning. Finish the waiting work first; for planning "
-              "beyond this, open a separate project and plan there.")
+MAX_NORMAL, MAX_URGENT = 10, 3   # active main tasks per working agent (user decisions 2026-11-04): normal, urgent
+MAX_QUEUE, MAX_IDEAS = 50, 50   # waiting main tasks, waiting ideas; subtasks and rule-script work not counted
+LIMIT_TELL = ("Tell the user: Session Guard keeps at most 10 active main tasks (+3 urgent) per working agent, 50 "
+              "queued tasks and 50 ideas. Finish or drop waiting work first.")
 
 
 class Refused(Exception):
@@ -110,6 +109,42 @@ def main_counts(data):
     return normal, urgent
 
 
+def agents(data, sid=None):
+    """Agents working in the project now: active sessions owning an active main task, plus the asking session.
+    Subagents are not agents: they work inside their session, on its subtasks."""
+    out = {sid} if sid else set()
+    for t in data["tasks"].values():
+        rec = data["sessions"].get(t["owner"]) if t["owner"] else None
+        if t["parent"] is None and t["status"] in ACTIVE and rec and rec["state"] == "active":
+            out.add(t["owner"])
+    return max(1, len(out))
+
+
+def normal_limit(data, sid=None):
+    """10 normal active main tasks for each agent working in the project at the same time (2 agents: 20)."""
+    return MAX_NORMAL * agents(data, sid)
+
+
+def urgent_limit(data, sid=None):
+    """3 urgent active main tasks for each agent working in the project at the same time (2 agents: 6)."""
+    return MAX_URGENT * agents(data, sid)
+
+
+def urgent_open(data, owner=None):
+    """Active urgent main tasks (of one owner when given)."""
+    return sorted((t["id"] for t in data["tasks"].values() if t["parent"] is None and t["kind"] == "urgent"
+                   and t["status"] in ACTIVE and (owner is None or t["owner"] == owner)), key=sort_key)
+
+
+def _no_new_while_urgent(data, sid):
+    """An urgent task belongs to its agent: only its owner takes no new task until it is finished (user decision
+    2026-11-04); the other agents go on."""
+    busy = urgent_open(data, sid)
+    if busy:
+        raise Refused("YOUR URGENT TASK IS ACTIVE (%s): you take no new task until it is finished. Tell the user; "
+                      "record the request as an idea (`sg idea add`) so it is not lost" % ", ".join(busy))
+
+
 def queue_count(data):
     return sum(1 for t in data["tasks"].values()
                if t["parent"] is None and t["status"] == QUEUED and t["kind"] != "rule-script")
@@ -145,11 +180,27 @@ def related_text(found):
             "user if so): " + "; ".join("%s %s (%s, %s) \"%s\"" % (i, k, s, sc, t[:60]) for sc, i, k, s, t in found))
 
 
+STOP = set("with from that this into have will when then than they them what which also only each very been were "
+           "için olarak gibi daha veya ile bir iki olan olsun şekilde kadar sonra önce bunu şunu".split())
+
+
+def stems(text):
+    """Keywords of a text, cut to 5 letters so Turkish and English word endings still match (görevler ~ görev)."""
+    return {w[:5] for w in _words(text).split() if len(w) >= 4 and w not in STOP}
+
+
+def word_hits(titles, items, keep=25):
+    """items [(id, line)] sharing keywords with any of the titles, most shared first: how finished work, above all
+    the pre-2.0 items without a 2.0 id, is found by search."""
+    want = set().union(*[stems(t) for t in titles]) if titles else set()
+    scored = [(len(want & stems(line)), iid, line) for iid, line in items]
+    scored = sorted((s for s in scored if s[0]), key=lambda s: -s[0])
+    return scored[:keep], max(0, len(scored) - keep)
+
+
 def validate(data):
-    normal, urgent = main_counts(data)
-    if normal > MAX_NORMAL or urgent > MAX_URGENT or normal + urgent > MAX_MAIN:
-        raise Refused("active main task limit: at most %d normal + %d urgent (now %d + %d)" % (
-            MAX_NORMAL, MAX_URGENT, normal, urgent))
+    """The per-agent limits are checked where a task is created or started, not here: a session ending lowers the
+    limits and must never block the store."""
     for tid, t in data["tasks"].items():
         if not core.TASK_ID.match(tid) or t["id"] != tid:
             raise Refused("bad task id " + tid)
@@ -185,6 +236,107 @@ def link(data, parent, child):
             p["children"].append(child)
     elif parent not in c["continues"] and parent != c["parent"]:
         c["continues"].append(parent)
+
+
+def resolve(data, sid):
+    """A child session's first id stays an alias of its child id (so $SG_SESSION_ID keeps working)."""
+    rec = (data or {}).get("sessions", {}).get(sid) or {}
+    return rec.get("renamed_to") or sid
+
+
+CHILD_KINDS = {"bound": "B", "independent": "I"}
+
+
+def make_child(data, old, parent, kind):
+    """A session started from another one gets its kind and the id <parent>-B<n> (bound) or <parent>-I<n>
+    (independent) before it owns anything. Returns the new id, or None (unknown parent, already a child, or it
+    already owns a task)."""
+    p, me = data["sessions"].get(parent), data["sessions"].get(old)
+    if kind not in CHILD_KINDS or not p or not me or me.get("parent") or me.get("renamed_to") or parent == old or \
+            any(t["owner"] == old for t in data["tasks"].values()):
+        return None
+    n = 1
+    while "%s-%s%d" % (parent, CHILD_KINDS[kind], n) in data["sessions"]:
+        n += 1
+    new = "%s-%s%d" % (parent, CHILD_KINDS[kind], n)
+    data["sessions"][new] = dict(me, id=new, parent=None, children=[], continues=[], kind=kind)
+    data["sessions"][old] = dict(me, state="renamed", renamed_to=new)
+    link(data, parent, new)
+    return new
+
+
+def child_kind(data, sid):
+    """How a session started from another one is used, fixed when it starts (user decision 2026-11-04):
+    bound         works only on subtasks of its parent's work (a test, a part of it): it hands off and is locked
+                  together with its parent
+    independent   its own main tasks, never the parent's work: it goes on when the parent stops; it is only told
+    continuation  took over the parent's hand-off: it works on as the parent did (no child kind)"""
+    return (data["sessions"].get(sid) or {}).get("kind") or "continuation"
+
+
+def _lineage(data, sid):
+    """The sessions above sid: its parent, the parent's parent, ..."""
+    out, rec = [], data["sessions"].get(sid) or {}
+    while rec.get("parent") and rec["parent"] not in out and rec["parent"] != sid:
+        out.append(rec["parent"])
+        rec = data["sessions"].get(rec["parent"]) or {}
+    return out
+
+
+def _parents_work(data, sid, t):
+    """The task belongs to the work of a session above sid: its main task is (or was) owned there."""
+    while t["parent"]:
+        t = data["tasks"][t["parent"]]
+    above = _lineage(data, sid)
+    return bool(above) and any(o["session"] in above for o in t["owners"])
+
+
+def _kind_allows(data, sid, t=None, parent=None):
+    """The kinds never take each other's work: a bound child session agent works only on subtasks of its parent's
+    work; an independent one never on its parent's work. t: a task taken over; parent: a new task's parent."""
+    kind = (data["sessions"].get(sid) or {}).get("kind")
+    if kind not in CHILD_KINDS:
+        return
+    x = t if t is not None else (data["tasks"].get(parent) if parent else None)
+    if kind == "bound" and (x is None or x["parent"] is None and t is not None or not _parents_work(data, sid, x)):
+        raise Refused("you are a BOUND child session agent (%s): you work only on subtasks of your parent's work "
+                      "(`sg task new --parent <its task>`); no main task, no other work. Other work: record it as an "
+                      "idea (`sg idea add`) or tell the user to start it in another session" % sid)
+    if kind == "independent" and x is not None and _parents_work(data, sid, x):
+        raise Refused("you are an INDEPENDENT child session agent (%s): your parent's work (%s) is not yours, nor "
+                      "its subtasks; it goes to a bound child session or to the session that takes over the parent's "
+                      "hand-off" % (sid, x["id"]))
+
+
+def children_of(data, sid, kind=None):
+    """Active child session agents of sid (bound ones with their own bound children, down the chain)."""
+    out = []
+    for cid in (data["sessions"].get(sid) or {}).get("children") or []:
+        c = data["sessions"].get(cid)
+        if not c or c["state"] != "active" or c.get("stopped"):
+            continue
+        k = child_kind(data, cid)
+        if kind in (None, k):
+            out.append((cid, k))
+        if k == "bound":
+            out += [x for x in children_of(data, cid, kind) if x not in out]
+    return out
+
+
+def start_handoff(data, sid):
+    """The parent begins its hand-off: its bound child session agents must hand off first."""
+    rec = data["sessions"].get(sid)
+    if rec and not rec.get("handing_off"):
+        rec["handing_off"] = core.iso()
+    return [(c, missing_handoffs(data, c)) for c, _ in children_of(data, sid, "bound")]
+
+
+def mark_stopped(data, sid, reason):
+    """The session's permanent lock (context, finish, break) seen from the store, so the sessions started from it
+    learn it; it blocks nothing (the stopping session still writes its hand-offs)."""
+    rec = data["sessions"].get(sid)
+    if rec and not rec.get("stopped"):
+        rec["stopped"] = {"reason": reason, "at": core.iso()}
 
 
 def lock_session(data, sid, reason):
@@ -248,6 +400,7 @@ def new_task(data, sid, title, kind="normal", priority="P2", parent=None, approv
         raise Refused("kind must be one of " + ", ".join(KINDS))
     if priority not in PRIORITIES:
         raise Refused("priority must be one of " + ", ".join(PRIORITIES))
+    _kind_allows(data, sid, parent=parent and task(data, parent)["id"])
     if parent:
         p = task(data, parent)
         if p["status"] in CLOSED:
@@ -257,26 +410,30 @@ def new_task(data, sid, title, kind="normal", priority="P2", parent=None, approv
     elif queue:
         if kind not in ("normal", "rule-script"):
             raise Refused("only normal and rule-script tasks wait in the queue")
+        _no_new_while_urgent(data, sid)
         if not (approval or "").strip():
             raise Refused("a queued task needs the user's approval: --approval \"<the user's words>\"")
         if kind != "rule-script" and queue_count(data) >= MAX_QUEUE:
-            raise Refused("10 tasks already wait in the queue. " + LIMIT_TELL)
-    else:
-        if kind not in EXEMPT and not (approval or "").strip():
+            raise Refused("%d tasks already wait in the queue. %s" % (MAX_QUEUE, LIMIT_TELL))
+    elif kind not in EXEMPT:
+        if kind != "urgent":
+            _no_new_while_urgent(data, sid)
+        if not (approval or "").strip():
             raise Refused("a new active main task needs the user's approval: ask the user, then pass "
-                          "--approval \"<the user's words>\". Unrelated work goes to the backlog (`sg idea add`)")
+                          "--approval \"<the user's words>\". Unrelated work goes to the ideas (`sg idea add`)")
         normal, urgent = main_counts(data)
-        if kind in ("normal", "rule-script") and normal >= MAX_NORMAL:
-            raise Refused("3 normal main tasks are active. Finish one, put the work in the backlog (`sg idea add`), "
-                          "or, if it cannot wait, ask the user for one urgent task (--kind urgent --reason ...)")
+        limit = normal_limit(data, sid)
+        if kind in ("normal", "rule-script") and normal >= limit:
+            raise Refused("%d normal main tasks are active (limit %d: %d per working agent). Finish one, queue the "
+                          "work (`sg task new --queue`) or record it as an idea (`sg idea add`); if it cannot wait, "
+                          "ask the user for an urgent task (--kind urgent --reason ...)" % (normal, limit, MAX_NORMAL))
         if kind == "urgent":
-            if normal < MAX_NORMAL:
-                raise Refused("an urgent task is only for when 3 normal tasks are active; create a normal task "
-                              "with --priority P1")
             if not (reason or "").strip():
                 raise Refused("an urgent task needs --reason")
-            if urgent >= MAX_URGENT:
-                raise Refused("one urgent task is already active")
+            limit = urgent_limit(data, sid)
+            if urgent >= limit:
+                raise Refused("%d urgent tasks are already active (limit %d: %d per working agent)" % (
+                    urgent, limit, MAX_URGENT))
     tid = _new_id(data, parent)
     t = data["tasks"][tid] = {
         "id": tid, "title": title, "kind": kind, "priority": priority, "status": "open", "parent": parent,
@@ -302,9 +459,12 @@ def start(data, sid, tid):
     t = task(data, tid)
     if t["status"] != QUEUED:
         raise Refused("%s is %s, not queued" % (tid, t["status"]))
-    normal, urgent = main_counts(data)
-    if normal >= MAX_NORMAL:
-        raise Refused("3 normal main tasks are active: finish one before starting %s" % tid)
+    _kind_allows(data, sid, t=t)
+    _no_new_while_urgent(data, sid)
+    normal, _ = main_counts(data)
+    if normal >= normal_limit(data, sid):
+        raise Refused("%d normal main tasks are active (the limit for the agents working now): finish one before "
+                      "starting %s" % (normal, tid))
     t["status"] = "open"
     _transfer(data, t, sid, "started from the queue")
     return t
@@ -330,6 +490,7 @@ def claim(data, sid, tid, takeover_approval=None):
         raise Refused("session %s is locked" % sid)
     if t["owner"] == sid:
         return "already yours"
+    _kind_allows(data, sid, t=t)
     old = t["owner"]
     old_rec = data["sessions"].get(old) if old else None
     if t["handoff"]:
@@ -452,7 +613,8 @@ def set_work(data, sid, tid, work):
     return t
 
 
-def handoff(data, sid, tid, technical, done=(), pending=(), developer=None, branch=None, pr=None, user_command=None):
+def handoff(data, sid, tid, technical, done=(), pending=(), developer=None, branch=None, pr=None, user_command=None,
+            children_gone=None):
     """Writes (or refreshes) the task's hand-off. Not repeated when nothing changed; never for a closed task."""
     t = task(data, tid)
     _check_owner(data, sid, t)
@@ -461,6 +623,12 @@ def handoff(data, sid, tid, technical, done=(), pending=(), developer=None, bran
     if not (technical or "").strip():
         raise Refused("a hand-off needs --technical: what the next session must know to continue (files, commands, "
                       "where it stopped)")
+    waiting = [c for c, miss in start_handoff(data, sid) if miss]
+    if waiting and not (children_gone or "").strip():
+        raise Refused("bound child session agents have not written their hand-offs yet: %s. Run `sg handoff "
+                      "children`, send each the message it prints, run it again until all are ready; only then write "
+                      "your hand-off. A child that cannot answer: ask the user, then pass --children-gone \"<the "
+                      "user's words>\"" % ", ".join(waiting))
     if done or pending:
         note(data, sid, tid, done=done, pending=pending)
     rec = data["sessions"].get(sid) or {}
@@ -472,7 +640,9 @@ def handoff(data, sid, tid, technical, done=(), pending=(), developer=None, bran
          "technical": technical.strip(),
          "user_command": user_command if user_command is not None else
          (old or {}).get("user_command") or t.get("pending_user_command"), "work": t.get("work"),
-         "created": core.iso(), "state": "prepared", "push": None}
+         "created": core.iso(), "state": "prepared", "push": None,
+         "child_handoffs": [{"session": c, "kind": k, "tasks": [t["id"] for t in owned_open(data, c)]}
+                            for c, k in children_of(data, sid)]}
     if old and not old.get("stale") and all(old.get(f) == h[f] for f in HANDOFF_FIELDS
                                            if f not in ("created", "state", "push", "work")) \
             and _same_work(old.get("work"), h["work"]):
@@ -544,7 +714,7 @@ def end_session(data, sid, reason):
 
 
 # --- merging two copies of the store (git merge of a side branch) ------------------------------------
-STATE_ORDER = {"active": 0, "ended": 1, "locked": 2}
+STATE_ORDER = {"active": 0, "renamed": 1, "ended": 1, "locked": 2}
 
 
 def merge(ours, theirs):
@@ -647,13 +817,14 @@ def _renumber(ours, theirs):
 
 # --- ideas (backlog) ----------------------------------------------------------------------------------
 def add_idea(data, sid, text, source=None, rule=None, force=None, prefix="IDEA"):
-    """An idea gets a temporary id (IDEA-xxx); when it becomes a task the task id replaces it. At most 10 wait
-    (rule-review ideas not counted); a near copy of an existing task or idea is refused."""
+    """An idea gets a temporary id (IDEA-xxx); when it becomes a task the task id replaces it. At most 50 wait
+    (rule-review ideas not counted); a near copy of an existing task or idea is refused. An idea is not a task, so
+    it is recorded while an urgent task is active too."""
     text = (text or "").strip()
     if not text:
         raise Refused("an idea needs a text")
     if source != "rule-review" and idea_count(data) >= MAX_IDEAS:
-        raise Refused("10 ideas already wait. " + LIMIT_TELL)
+        raise Refused("%d ideas already wait. %s" % (MAX_IDEAS, LIMIT_TELL))
     dup = [f for f in similar(data, text, 0.85)]
     if dup and not (force or "").strip():
         raise Refused("this is a near copy of %s (%s, %s): \"%s\". Do not add it again; if the user says it is "

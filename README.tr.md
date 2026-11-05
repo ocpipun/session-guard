@@ -30,11 +30,19 @@ bir eşik geçildiğinde talimat verir. Claude bir eşiğe hiçbir zaman erken d
 
 ## 2. Molalar
 Normal modda, Claude'un son cevabından bu yana 1 saatten fazla geçmişse:
-- bağlam 100k üstündeyse mesaj **çalıştırılmaz**. Session Guard mesajı kelimesi kelimesine her görevin devir
+- bağlam 175k üstündeyse mesaj **çalıştırılmaz**. Session Guard mesajı kelimesi kelimesine her görevin devir
   notuna yazar, Claude devreder, oturum kilitlenir;
-- 100k ya da altındaysa tek satır hatırlatma, sonra mesaj çalışır.
+- 175k ya da altındaysa tek satır hatırlatma, sonra mesaj çalışır.
 
-Claude'un kendi arka plan işini beklemek mola sayılmaz. Uzun modda mola kuralı yoktur.
+Claude'un kendi arka plan işini beklemek mola sayılmaz. Uzun modda mola kuralı yoktur; böyle bir moladan hemen
+sonra yazılan "start long mode" kuralı atlatmaz (oturum önce devreder).
+
+**Mola ölçümü (isteğe bağlı, varsayılan kapalı).** Moladan sonra devam etmenin size maliyetini görmek için
+Claude'dan `sg breaks on` komutunu çalıştırmasını isteyin. Bu bilgisayardaki bütün oturumlar ve projeler için
+geçerlidir, `sg breaks off` ile kapanır. 1 saatten uzun her aradan sonra Claude o mesajın başında ve sonunda kotanızı
+okur (yalnız masaüstü uygulamasında); aradan önceki son okumayla birlikte
+`~/.claude/session_guard_v2/break_measurements.jsonl` dosyasına tek satır yazılır. Hiçbir veri bilgisayarınızdan
+çıkmaz. `sg breaks show` satırları listeler. Her okuma birkaç token harcar.
 
 ## 3. Oturumu bitirme
 `finish session` (mesajın başında, ardından virgül ya da nokta; ya da mesajın sonunda): Claude başka hiçbir şey
@@ -65,19 +73,40 @@ Kilitli oturuma mesaj ulaşmaz; kullanıcıya nedeni söylenir. Türleri:
   alt görev `TASK-001-1`, `TASK-001-2-1`. Kimlikler hiçbir zaman yeniden kullanılmaz.
 - **Sahiplik:** görevi yalnız sahibi değiştirir. Boştaki görev (sahibi yok, sahibi bitti ya da kilitlendi, ya da
   devir bekliyor) alınabilir; aktif bir oturumun görevi yalnız kullanıcının onayıyla. Sahiplik geçmişi silinmez.
-- **Sınırlar:** en fazla 3 normal ana görev; 3'ü doluysa gerekçeli ve kullanıcı onaylı 1 acil görev; 10 sıradaki
-  görev; 10 fikir (geçici kimlik IDEA-xxx; fikir göreve dönüşünce yerini görev kimliği alır). Bir mesajla en fazla
-  24 iş gelebilir; Claude çok adımlı bir mesajı bu biçime kendisi ayırır. Alt görevler, kurulum, migration ve
-  kural-betiği işleri sayılmaz. Sınır aşılırsa Claude kullanıcıya önce bekleyen işleri bitirmesini, planlamayı ayrı
-  bir projede yapmasını söyler: Session Guard oturum maliyetini optimize eder, projeyi yönetmez.
-- **Aynı işi iki kez yapmamak:** yeni görev ya da fikir mevcut hepsiyle (süren, sıradaki, biten, fikirler)
-  karşılaştırılır; neredeyse aynısı reddedilir, benzerleri gösterilir; Claude çakışma ya da hata riskini denetler
-  ve kullanıcıyı uyarır.
-- **Bekleyen işler STATUS dışında:** sıradaki görevler ve fikirler `docs/TASK_BACKLOG.md` dosyasında listelenir;
-  STATUS yalnız sayılarını gösterir, böylece kısa kalır. Oraya "## Add an idea" başlığı altına (ya da STATUS'ta
-  bir "## Notes" başlığı altına) yazılan her madde kimlikli bir fikre dönüşür ve mevcut işlerle karşılaştırılır.
-- **Her yeni iş isteği önce denetlenir:** `sg task check` sınırları ve ilgili süren, sıradaki, biten görevleri ve
-  fikirleri gösterir; çakışan, çelişen ya da aynı işe odaklanan iş başlamadan bulunur.
+- **Sınırlar:** projede aynı anda çalışan her ajan için en fazla 10 normal ve 3 acil ana görev (acil: gerekçeli
+  ve kullanıcı onaylı; iki ajan: 20 + 6), 50 sıradaki görev, 50 fikir (geçici kimlik IDEA-xxx; fikir göreve
+  dönüşünce yerini görev kimliği alır). Çok adımlı bir projeyi ya da toplu bir mesajı Claude bu biçime kendisi
+  ayırır. Alt görevler, kurulum, migration ve kural-betiği işleri sayılmaz. Sınır aşılırsa Claude kullanıcıya
+  önce bekleyen işleri bitirmesini ya da bırakmasını söyler.
+- **Önce acil iş:** acil görev listenin başına geçer ve ajanına aittir: sürerken o ajan yeni görev almaz (yeni
+  istekler kaybolmasın diye fikir olarak kaydedilir); diğer ajanlar çalışmaya devam eder.
+- **Alt ajana yalnız alt görev:** alt ajan (Agent aracı) yalnız oturumun sahip olduğu bir görevin alt göreviyle
+  başlatılır, alt görev kimliği isteminde yazar; Session Guard başka başlatmaları reddeder, alt ajan ana görev
+  açamaz. Alt ajanlar ve alt görevler sayılmaz; alt ajan kendi alt görevini devredip kapatabilir.
+- **Alt oturum ajanları:** bir oturumdan başlatılan oturum, aynı kurallarla çalışan ayrı bir ajandır. Türü
+  başlarken istemdeki `SG-PARENT: <kimlik> bound` ya da `SG-PARENT: <kimlik> independent` satırıyla belirlenir:
+  - *Bağlı* (`<üst>-B<n>`): üst oturumun işine yardım eder (test, işin bir parçası), yalnız üst oturumun
+    görevlerinin alt görevleri üzerinde çalışır. Üst oturum devretmeden önce `sg handoff children` bağlı alt
+    oturumları ve onlara gönderilecek mesajı verir; üst oturum devir notunu onlarınkinden sonra yazar, birlikte
+    kilitlenirler.
+  - *Bağımsız* (`<üst>-I<n>`): kendi ana görevleri vardır, üst oturumun işini almaz. Üst oturum durunca Session
+    Guard ona işini devredilebilir hâle getirmesini (dal ve PR devir notunda) söyler, o da çalışmayı sürdürür.
+  - Türler birbirinin işini alamaz. Bir devri devralan oturum alt oturum değil, devam oturumudur.
+- **Sıkıştırma ve çatallama:** Claude Code konuşmayı sıkıştırınca Session Guard kuralları ve STATUS'u yeniden
+  verir, küçülen bağlamı ölçer, tek seferlik bildirimler yeniden çalışır. Çatallanan oturum (/fork, /branch) yeni
+  bir oturum olur; modu (uzun mod dahil) ve bağlamı korunur.
+- **Aynı işi iki kez yapmamak:** kullanıcı yeni iş verince (proje başında toplu mesaj ya da sonradan yeni
+  görevler) `sg task check` süren, acil, sıradaki bütün görevleri ve fikirleri, yeni işlerle ortak kelimesi olan
+  biten işleri (2.0 öncesi işler kelimeyle bulunur) ve neredeyse aynı olanları listeler. Claude bunları
+  karşılaştırır; çakışma, çelişki ya da neredeyse aynı iş varsa kullanıcıya kendi dilinde açıklar; neredeyse
+  aynısı reddedilir.
+- **Bekleyen işler STATUS dışında:** sıradaki görevler `docs/TASK_BACKLOG.md`, fikirler `docs/IDEA_TASKS.md`
+  dosyasındadır; ikisi de üretilir, her kimlik ayrı bölümdür, kayıtlar satır numarasıyla değil kimlikle değişir.
+  STATUS yalnız sayılarını gösterir, böylece kısa kalır. IDEA_TASKS.md'de "## Add an idea" başlığı altına (ya da
+  STATUS'ta bir "## Notes" başlığı altına) yazılan her madde kimlikli bir fikre dönüşür ve mevcut işlerle
+  karşılaştırılır.
+- **Ne zaman ne okunur:** oturum başında CLAUDE.md ve STATUS.md; yeni işte yalnız yukarıdaki denetim; arşive
+  yalnız gerekince, aramayla bakılır (2.0 kayıtları kimlikle, 2.0 öncesi kayıtlar kelimeyle).
 - **Gerektiğinde yeni kimlik:** kaldığı yerden devam aynı kimlikle; hatalı biten işi yeniden yapmak ya da biten
   işe özellik eklemek eskisine bağlı yeni görevdir. Alt görev bitince üst görev kendiliğinden bitmez.
 - **Güvenli paralel yazma:** proje başına bir kilit, kilit içinde taze okuma, sürüm denetimi; görev kaydının elle
@@ -107,9 +136,10 @@ eski oturum kilitlenir. Alınan devir notları `STATUS_ARCHIVE.md`'ye geçer.
 | Dosya | Görevi |
 |---|---|
 | `CLAUDE.md` | kalıcı kurallar ve kararlar |
-| `docs/STATUS.md` | güncel durum; görev bölümünü Session Guard üretir; en fazla 50 satır (üstündeyse yeni görev yok) |
+| `docs/STATUS.md` | güncel durum; görev bölümünü Session Guard üretir; satır sınırı yok (sınır görev sayısıdır) |
 | `docs/STATUS_ARCHIVE.md` | geçmiş; yalnız eklenir; oturum başında okunmaz, yalnız aranır |
-| `docs/TASK_BACKLOG.md` | bekleyen fikirler |
+| `docs/TASK_BACKLOG.md` | sıradaki görevler (üretilir, her TASK-ID ayrı bölüm) |
+| `docs/IDEA_TASKS.md` | fikirler (üretilir, her IDEA-ID ayrı bölüm) |
 | `docs/COMPLETED_TASKS.md` | biten her görev için tek satır |
 | `.claude/session-guard2/store.json` | görev kaydı; projeyle birlikte commitlenir |
 

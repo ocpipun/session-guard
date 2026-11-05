@@ -4,6 +4,7 @@
 Every test runs the real script in a subprocess (as Claude Code runs hooks: JSON on stdin) with HOME pointed at a
 temporary folder, so the real ~/.claude is never touched.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -19,6 +20,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(ROOT, "plugins", "session-guard")
 SCRIPT = os.path.join(PLUGIN, "scripts", "session_guard.py")
 S1, S2, S3 = "S-20261103-aaaaaa", "S-20261103-bbbbbb", "S-20261103-cccccc"
+
+
+def in_store(root, change):
+    """Bulk work straight through the store module (one subprocess per item would be slow)."""
+    if os.path.join(PLUGIN, "scripts") not in sys.path:
+        sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
+    from sg2 import store
+    return store.mutate(root, lambda d: change(store, d))
+
+
+def unique(prefix, n):
+    return "%s %d %s" % (prefix, n, hashlib.md5(("%s%d" % (prefix, n)).encode()).hexdigest()[:10])
 
 
 def stamp(minutes_ago):
@@ -133,22 +146,181 @@ class Tasks(Base):
         self.assertIn("TASK-002-2", self.t("new", "--title", "a2", "--parent", "TASK-002", ok=True))
         self.assertIn("TASK-002-2-1", self.t("new", "--title", "a21", "--parent", "TASK-002-2", ok=True))
 
-    def test_main_task_limit_three_plus_one_urgent(self):
-        for n in "ABC":
-            self.t("new", "--title", n, "--approval", "ok", ok=True)
-        self.assertIn("3 normal", self.t("new", "--title", "D", "--approval", "ok", ok=False))
-        self.assertIn("--reason", self.t("new", "--title", "U", "--kind", "urgent", "--approval", "ok", ok=False))
-        self.t("new", "--title", "U", "--kind", "urgent", "--approval", "ok", "--reason", "prod down", ok=True)
-        self.assertIn("urgent task is already", self.t("new", "--title", "U2", "--kind", "urgent", "--approval", "ok",
-                                                       "--reason", "x", ok=False))
+    def test_main_task_limit_ten_per_working_agent(self):
+        _, a = self.start("la", self.root)
+        _, b = self.start("lb", self.root)
+        new = lambda sid, title: self.sg("task", "new", "--title", title, "--approval", "ok", "--session", sid,
+                                         "--root", self.root)
+        for n in range(10):
+            self.assertIn("created", new(a, unique("work item", n)))
+        self.assertIn("limit 10", new(a, "the eleventh task"))
+        self.assertIn("created", new(b, "the second agent's task"))       # two agents working at once: 20
+        self.assertIn("normal 11/20 · urgent 0/6", self.text(self.root, "docs", "STATUS.md"))
         for n in range(6):  # subtasks have no limit
-            self.t("new", "--title", "sub%d" % n, "--parent", "TASK-002", ok=True)
-        lines = self.text(self.root, "docs", "STATUS.md").splitlines()
-        self.assertLessEqual(len(lines), 50)
+            self.sg("task", "new", "--title", "sub%d" % n, "--parent", "TASK-002", "--session", a, "--root",
+                    self.root, ok=True)
 
-    def test_urgent_only_when_three_normal(self):
-        self.assertIn("P1", self.t("new", "--title", "U", "--kind", "urgent", "--approval", "ok", "--reason", "r",
-                                   ok=False))
+    def test_no_status_line_limit(self):
+        sids = ["S-20261104-%06x" % n for n in range(1, 5)]
+
+        def fill(store, d):
+            for sid in sids:
+                store.register_session(d, sid, None, "computer")
+                for n in range(10):
+                    store.new_task(d, sid, unique(sid, n), approval="ok")
+        in_store(self.root, fill)
+        self.assertIn("normal 40/40", self.text(self.root, "docs", "STATUS.md"))
+        self.assertGreater(len(self.text(self.root, "docs", "STATUS.md").splitlines()), 50)
+        out = self.hook("UserPromptSubmit", "nl", cwd=self.root, prompt="go on")
+        self.assertNotIn("LINES", json.dumps(out))                         # no refusal for a long STATUS
+        self.sg("migrate", "verify", self.root, ok=True)
+
+    def test_urgent_first_and_no_new_task_until_done(self):
+        self.t("new", "--title", "normal work", "--approval", "ok", ok=True)                          # TASK-002
+        self.assertIn("--reason", self.t("new", "--title", "U", "--kind", "urgent", "--approval", "ok", ok=False))
+        self.t("new", "--title", "production is down", "--kind", "urgent", "--approval", "ok", "--reason", "outage",
+               ok=True)                                                                               # TASK-003
+        status = self.text(self.root, "docs", "STATUS.md")
+        self.assertLess(status.index("TASK-003"), status.index("TASK-002"))           # urgent at the top
+        self.assertIn("URGENT FIRST", status)
+        self.assertIn("YOUR URGENT TASK IS ACTIVE (TASK-003)", self.t("new", "--title", "D", "--approval", "ok",
+                                                                      ok=False))
+        self.assertIn("YOUR URGENT TASK IS ACTIVE", self.t("new", "--title", "Q", "--queue", "--approval", "ok",
+                                                           ok=False))
+        self.assertIn("IDEA-001", self.sg("idea", "add", "record it for later", "--session", S1, "--root", self.root,
+                                          ok=True))                                   # ideas are still recorded
+        self.assertIn("YOUR URGENT TASK IS ACTIVE", self.sg("idea", "promote", "IDEA-001", "--approval", "ok",
+                                                            "--session", S1, "--root", self.root, ok=False))
+        self.t("new", "--title", "fix the database", "--kind", "urgent", "--approval", "ok", "--reason", "data loss",
+               ok=True)
+        self.t("new", "--title", "restart the job runner", "--kind", "urgent", "--approval", "ok", "--reason",
+               "jobs stuck", ok=True)
+        self.assertIn("3 urgent", self.t("new", "--title", "U4", "--kind", "urgent", "--approval", "ok", "--reason",
+                                         "x", ok=False))
+        self.t("new", "--title", "another agent's work", "--approval", "ok", sid=S2, ok=True)    # it goes on
+        self.t("new", "--title", "check the logs", "--parent", "TASK-003", ok=True)   # the urgent work goes on
+        for tid in ("TASK-003-1", "TASK-003", "TASK-004", "TASK-005"):
+            self.t("done", tid, ok=True)
+        self.t("new", "--title", "D", "--approval", "ok", ok=True)
+
+    def test_subagent_gets_only_a_subtask_of_an_owned_task(self):
+        _, a = self.start("sa", self.root)
+        self.sg("task", "new", "--title", "build the parser", "--approval", "ok", "--session", a, "--root", self.root,
+                ok=True)                                                                          # TASK-002
+        launch = lambda prompt, kind="general-purpose": self.hook(
+            "PreToolUse", "sa", cwd=self.root, tool_name="Agent",
+            tool_input={"prompt": prompt, "description": "x", "subagent_type": kind})
+        denied = lambda out: (out.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny"
+        self.assertTrue(denied(launch("Write a new CSV exporter for the user")))           # independent work
+        self.assertTrue(denied(launch("Work on TASK-002")))                                # a main task, not a subtask
+        self.sg("task", "new", "--title", "parse dates", "--parent", "TASK-002", "--session", a, "--root", self.root,
+                ok=True)                                                                          # TASK-002-1
+        self.assertFalse(denied(launch("Your subtask is TASK-002-1: parse dates")))
+        self.assertTrue(denied(launch("Your subtask is TASK-009-1")))                      # not this session's
+        self.assertFalse(denied(launch("Read https://example.com", "web-fetch")))
+        sg = 'python "%s" ' % SCRIPT
+        bash = lambda cmd, **extra: self.hook("PreToolUse", "sa", cwd=self.root, tool_name="Bash",
+                                              tool_input={"command": cmd}, **extra)
+        self.assertTrue(denied(bash(sg + 'task new --title "other work" --approval ok', agent_id="ag1",
+                                    agent_type="general-purpose")))
+        self.assertTrue(denied(bash(sg + "task start TASK-003", agent_id="ag1")))
+        self.assertFalse(denied(bash(sg + 'task new --title "dates in UTC" --parent TASK-002-1', agent_id="ag1")))
+        self.assertFalse(denied(bash(sg + 'handoff write TASK-002-1 --technical "where it stopped"', agent_id="ag1")))
+        self.assertFalse(denied(bash(sg + 'task new --title "other work" --approval ok')))    # the session itself
+        self.assertEqual(self.store(self.root)["sessions"][a]["state"], "active")
+
+    def test_child_session_gets_its_own_id_and_goes_on_when_the_parent_stops(self):
+        _, a = self.start("pa", self.root)
+        _, c = self.start("ch", self.root)
+        out = self.hook("UserPromptSubmit", "ch", cwd=self.root,
+                        prompt="Build the exporter.\nSG-PARENT: %s independent\nThe user said: yes, do it" % a)
+        child = a + "-I1"
+        self.assertIn("CHILD SESSION: your SESSION-ID is %s" % child, self.ctx(out))
+        data = self.store(self.root)
+        self.assertEqual(data["sessions"][child]["parent"], a)
+        self.assertIn(child, data["sessions"][a]["children"])
+        self.assertEqual(data["sessions"][c]["renamed_to"], child)
+        self.assertIn("owner " + child, self.sg("task", "new", "--title", "build the exporter", "--approval",
+                                                 "yes, do it", "--session", c, "--root", self.root, ok=True))
+        self.hook("UserPromptSubmit", "pa", cwd=self.root, prompt="finish session")
+        self.assertEqual(self.store(self.root)["sessions"][a]["stopped"]["reason"], "finish: finish session")
+        out = self.hook("PostToolUse", "ch", cwd=self.root, tool_name="Bash")
+        self.assertIn("PARENT SESSION %s HANDS OFF / STOPPED" % a, self.ctx(out))
+        self.assertIn("INDEPENDENT child session agent", self.ctx(out))        # its own main task: it goes on
+        self.assertNotIn("PARENT SESSION", self.ctx(self.hook("PostToolUse", "ch", cwd=self.root, tool_name="Bash")))
+        self.assertNotIn("decision", self.hook("UserPromptSubmit", "ch", cwd=self.root, prompt="go on"))
+
+    def test_bound_child_hands_off_before_its_parent_and_is_locked(self):
+        _, a = self.start("pb", self.root)
+        self.sg("task", "new", "--title", "release 2.0", "--approval", "ok", "--session", a, "--root", self.root,
+                ok=True)                                                                          # TASK-002
+        _, c = self.start("cb", self.root)
+        self.hook("UserPromptSubmit", "cb", cwd=self.root, prompt="Test the installer.\nSG-PARENT: %s bound" % a)
+        child = a + "-B1"
+        self.sg("task", "new", "--title", "test the installer", "--parent", "TASK-002", "--session", c, "--root",
+                self.root, ok=True)                                                               # TASK-002-1, bound
+        hw = lambda tid, sid: self.sg("handoff", "write", tid, "--technical", "where it stopped", "--session", sid,
+                                      "--root", self.root)
+        self.assertIn("have not written their hand-offs yet: " + child, hw("TASK-002", a))   # not before the child
+        out = self.sg("handoff", "children", "--session", a, "--root", self.root, ok=True)
+        self.assertIn("BOUND %s: NOT READY, hand-off missing for TASK-002-1" % child, out)
+        self.assertIn("PARENT HANDING OFF (%s)" % a, out)                                  # the message to send
+        out = self.hook("UserPromptSubmit", "cb", cwd=self.root, prompt=out.split('"')[1])  # the child gets it
+        self.assertIn("BOUND child session agent", self.ctx(out))
+        self.assertIn("hand-off", hw("TASK-002-1", c))
+        self.assertEqual(self.hook("UserPromptSubmit", "cb", cwd=self.root, prompt="go on").get("decision"),
+                         "block")                                                          # locked after its hand-off
+        self.assertIn("ready (all hand-offs written)", self.sg("handoff", "children", "--session", a, "--root",
+                                                               self.root, ok=True))
+        self.assertIn("prepared", hw("TASK-002", a))
+        self.assertIn("Child session agents: %s bound (tasks TASK-002-1" % child,
+                      self.sg("task", "show", "TASK-002", "--root", self.root, ok=True))
+
+    def test_child_kinds_never_take_each_others_work(self):
+        _, a = self.start("pk", self.root)
+        sg = lambda sid, *args, ok=True: self.sg(*args, "--session", sid, "--root", self.root, ok=ok)
+        sg(a, "task", "new", "--title", "release 2.0", "--approval", "ok")                      # TASK-002, parent's
+        _, n = self.start("nk", self.root)
+        out = self.hook("UserPromptSubmit", "nk", cwd=self.root, prompt="Help.\nSG-PARENT: %s" % a)
+        self.assertIn("has no kind", self.ctx(out))                                   # no kind: not a child
+        self.assertNotIn("renamed_to", self.store(self.root)["sessions"][n])
+        _, b = self.start("bk", self.root)
+        self.hook("UserPromptSubmit", "bk", cwd=self.root, prompt="Test it.\nSG-PARENT: %s bound" % a)
+        _, i = self.start("ik", self.root)
+        self.hook("UserPromptSubmit", "ik", cwd=self.root, prompt="Own work.\nSG-PARENT: %s INDEPENDENT" % a)
+        data = self.store(self.root)["sessions"]
+        self.assertEqual((data[a + "-B1"]["kind"], data[a + "-I1"]["kind"]), ("bound", "independent"))
+        self.assertIn("BOUND child session agent", sg(b, "task", "new", "--title", "my own", "--approval", "ok",
+                                                      ok=False))                          # no main task
+        sg(b, "task", "new", "--title", "test the installer", "--parent", "TASK-002")      # TASK-002-1
+        self.assertIn("INDEPENDENT child session agent", sg(i, "task", "new", "--title", "a part", "--parent",
+                                                             "TASK-002", ok=False))       # not the parent's work
+        self.assertIn("INDEPENDENT child session agent", sg(i, "task", "claim", "TASK-002", "--takeover", "ok",
+                                                             ok=False))
+        sg(i, "task", "new", "--title", "export reports", "--approval", "yes")             # TASK-003, its own
+        self.assertIn("BOUND child session agent", sg(b, "task", "new", "--title", "x", "--parent", "TASK-003",
+                                                      ok=False))                          # not its parent's work
+        sg(i, "task", "new", "--title", "csv part", "--parent", "TASK-003")                # its own subtask
+
+    def test_new_work_check_lists_all_work_and_finds_pre20_by_keywords(self):
+        self.t("new", "--title", "write the user guide", "--approval", "ok", ok=True)            # TASK-002 running
+        self.t("new", "--title", "add a dark theme", "--queue", "--approval", "ok", ok=True)     # TASK-003 queued
+        self.t("new", "--title", "export reports as csv", "--approval", "ok", ok=True)           # TASK-004
+        self.t("done", "TASK-004", ok=True)
+        with open(os.path.join(self.root, "docs", "COMPLETED_TASKS.md"), "a", encoding="utf-8") as fh:
+            fh.write("- 2026-11-01 [SESSION-GUARD: 2.0] PRJ-x PRE20-DONE-001 · login sayfası düzeltildi · done "
+                     "before Session Guard 2.0\n")
+        out = self.sg("task", "check", "--title", "login sayfasını yeniden düzelt", "--title", "add a dark theme",
+                      "--title", "reports exported to csv files", "--root", self.root, ok=True)
+        self.assertIn("limits (1 agent: 10 normal + 3 urgent each): active normal 1/10 · urgent 0/3", out)
+        self.assertIn("NEAR COPY of TASK-003", out)
+        self.assertIn("- TASK-002 · write the user guide · open", out)             # all running work in full
+        self.assertIn("- TASK-003 · P2 · add a dark theme", out)                    # all queued work
+        self.assertIn("- PRE20-IDEA-001 · later idea", out)                         # all ideas
+        self.assertIn("- PRE20-DONE-001 · login sayfası düzeltildi", out)           # pre-2.0 by keywords
+        self.assertIn("- TASK-004 · export reports as csv · done", out)             # finished 2.0 work by keywords
+        self.assertNotIn("URGENT TASK IS ACTIVE", out)
+        self.assertIn("give every new item", self.sg("task", "check", "--root", self.root, ok=False))
 
     def test_ownership_claim_takeover_and_history(self):
         self.t("new", "--title", "A", "--approval", "ok", ok=True)
@@ -215,7 +387,8 @@ class Tasks(Base):
 
     def test_backlog_idea_and_promotion(self):
         self.assertIn("IDEA-001", self.sg("idea", "add", "dark mode", "--session", S1, "--root", self.root))
-        self.assertIn("dark mode", self.text(self.root, "docs", "TASK_BACKLOG.md"))
+        self.assertIn("### IDEA-001 · dark mode", self.text(self.root, "docs", "IDEA_TASKS.md"))
+        self.assertNotIn("dark mode", self.text(self.root, "docs", "TASK_BACKLOG.md"))
         self.assertIn("approval", self.sg("idea", "promote", "IDEA-001", "--session", S1, "--root", self.root,
                                           ok=False))
         self.sg("idea", "promote", "IDEA-001", "--approval", "ok", "--session", S1, "--root", self.root, ok=True)
@@ -294,6 +467,27 @@ class Guard(Base):
         out = self.hook("PostToolUse", "l", self.transcript("l", 905000), cwd=root, tool_name="Bash")
         self.assertFalse(out.get("continue", True))
 
+    def test_fork_keeps_long_mode_as_a_new_session_and_compaction_rearms_notices(self):
+        root = self.migrated("fk")
+        tr = self.transcript("fk", 1000)
+        _, a = self.start("fa", root, tr)
+        self.hook("UserPromptSubmit", "fa", tr, cwd=root, prompt="start long mode")
+        out = self.hook("UserPromptSubmit", "fa", self.transcript("fk", 260000), cwd=root, prompt="go")
+        self.assertIn("NOTICE (250k", self.ctx(out))
+        big = self.transcript("fk", 558000)                       # the same conversation, now 558k
+        out, b = self.start("fb", root, big, source="fork")
+        self.assertNotEqual(a, b)                                  # a fork is its own session...
+        self.assertIn("FORK of session %s" % a, self.ctx(out))
+        rec = json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions", "fb.json")))
+        self.assertTrue(rec["long"])                               # ...with the same mode
+        self.assertEqual(self.store(root)["sessions"][b]["parent"], a)
+        out = self.hook("UserPromptSubmit", "fb", big, cwd=root, prompt="go on")
+        self.assertNotIn("decision", out)                          # not hard-stopped at 558k (v1.4 was)
+        out = self.hook("SessionStart", "fa", self.transcript("fk", 22000), cwd=root, source="compact")
+        self.assertIn("COMPACTED", self.ctx(out))
+        out = self.hook("UserPromptSubmit", "fa", self.transcript("fk", 255000), cwd=root, prompt="go")
+        self.assertIn("NOTICE (250k", self.ctx(out))               # the notice fires again after compaction
+
     def test_long_mode_hands_off_at_800k_not_700k(self):
         root = self.project()
         self.start("h", root)
@@ -347,12 +541,12 @@ class Guard(Base):
         _, sid = self.start("b", root)
         self.sg("task", "new", "--title", "A", "--approval", "ok", "--session", sid, "--root", root, ok=True)
         cmd = "Şimdi render'ı başlat, sonra 'finish' yazma!"
-        out = self.hook("UserPromptSubmit", "b", self.transcript("b", 150000, minutes_ago=90), cwd=root, prompt=cmd)
+        out = self.hook("UserPromptSubmit", "b", self.transcript("b", 200000, minutes_ago=90), cwd=root, prompt=cmd)
         self.assertIn("BREAK RULE", self.ctx(out))
         self.assertEqual(self.store(root)["tasks"]["TASK-002"]["pending_user_command"], cmd)
         self.sg("handoff", "write", "TASK-002", "--technical", "t", "--session", sid, "--root", root, ok=True)
         self.assertEqual(self.store(root)["tasks"]["TASK-002"]["handoff"]["user_command"], cmd)
-        self.assertEqual(self.hook("UserPromptSubmit", "b", self.transcript("b", 150000), cwd=root,
+        self.assertEqual(self.hook("UserPromptSubmit", "b", self.transcript("b", 200000), cwd=root,
                                    prompt="x").get("decision"), "block")
 
     def test_break_small_context_reminds_and_long_mode_ignores(self):
@@ -361,8 +555,44 @@ class Guard(Base):
         out = self.hook("UserPromptSubmit", "s", self.transcript("s", 50000, minutes_ago=90), cwd=root, prompt="go")
         self.assertIn("BREAK REMINDER", self.ctx(out))
         self.hook("UserPromptSubmit", "s", self.transcript("s", 1000), cwd=root, prompt="start long mode")
-        out = self.hook("UserPromptSubmit", "s", self.transcript("s", 150000, minutes_ago=90), cwd=root, prompt="go")
+        out = self.hook("UserPromptSubmit", "s", self.transcript("s", 200000, minutes_ago=90), cwd=root, prompt="go")
         self.assertNotIn("BREAK", self.ctx(out))
+
+    def test_start_long_mode_after_a_break_does_not_skip_the_break_rule(self):
+        root = self.project()
+        self.start("lb", root)
+        out = self.hook("UserPromptSubmit", "lb", self.transcript("lb", 180000, minutes_ago=882), cwd=root,
+                        prompt="start long mode")                                  # the v1.4 case (145k then)
+        self.assertIn("BREAK RULE", self.ctx(out))
+        self.assertIn("LONG MODE was NOT turned on", self.ctx(out))
+        self.assertIn("Mode: normal", self.ctx(out))
+        self.assertEqual(self.hook("UserPromptSubmit", "lb", self.transcript("lb", 180000), cwd=root,
+                                   prompt="x").get("decision"), "block")
+
+    def test_break_measurement_is_off_by_default_and_can_be_turned_off(self):
+        self.env["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop"
+        root = self.project()
+        self.start("m", root)
+        out = self.hook("UserPromptSubmit", "m", self.transcript("m", 120000, minutes_ago=90), cwd=root, prompt="go")
+        self.assertIn("BREAK REMINDER", self.ctx(out))
+        self.assertNotIn("BREAK MEASUREMENT", self.ctx(out))                         # off for everyone by default
+        self.assertIn("break measurement ON", self.sg("breaks", "on", ok=True))
+        out = self.hook("UserPromptSubmit", "m", self.transcript("m", 120000, minutes_ago=90), cwd=root, prompt="go")
+        self.assertIn("BREAK MEASUREMENT", self.ctx(out))
+        self.assertNotIn("QUOTA READING", self.ctx(out))                              # one reading request only
+        usage = lambda p: {"plan": {"windows": [{"label": "5-hour limit", "percentUsed": p,
+                                                 "resetsAt": stamp(-120)}]}}
+        for p in (4, 6):
+            self.hook("PostToolUse", "m", self.transcript("m", 120000), cwd=root,
+                      tool_name="mcp__ccd_session_mgmt__get_usage", tool_response=usage(p))
+        out = self.sg("breaks", "show", ok=True)
+        self.assertIn("1 rows", out)
+        self.assertIn("| 90 | 120k | normal | remind | n/a > 4.0% > 6.0% |", out)
+        self.assertNotIn("BREAK MEASUREMENT", self.ctx(self.hook("UserPromptSubmit", "m", self.transcript("m", 120000),
+                                                                 cwd=root, prompt="go")))  # no break: no measurement
+        self.assertIn("break measurement OFF", self.sg("breaks", "off", ok=True))
+        out = self.hook("UserPromptSubmit", "m", self.transcript("m", 120000, minutes_ago=90), cwd=root, prompt="go")
+        self.assertNotIn("BREAK MEASUREMENT", self.ctx(out))                         # turned off again
 
     def test_own_background_job_is_not_a_break(self):
         root = self.project()
@@ -613,10 +843,10 @@ class Cleanup(Base):
         self.assertNotIn("\n\n\n", text)
         self.assertNotRegex(text, r"(?m)^-\s*$")
         self.assertNotRegex(text.split("## Notes")[1], r"(?m)^- ")                # Notes bullets left STATUS
-        backlog = self.text(root, "docs", "TASK_BACKLOG.md")
-        self.assertIn("- IDEA-001 · kept note", backlog)                             # ...and became ideas
-        self.assertIn("- IDEA-002 · second note", backlog)
-        self.assertIn("ideas 3/10: docs/TASK_BACKLOG.md", text)
+        ideas = self.text(root, "docs", "IDEA_TASKS.md")
+        self.assertIn("### IDEA-001 · kept note", ideas)                             # ...and became ideas
+        self.assertIn("### IDEA-002 · second note", ideas)
+        self.assertIn("ideas 3/50: docs/IDEA_TASKS.md", text)
 
     def test_rule_review_on_new_claude_md_rules(self):
         root = self.migrated(files={"CLAUDE.md": "# Rules\n- Answer in Turkish, short sentences.\n"})
@@ -634,7 +864,7 @@ class Cleanup(Base):
         self.sg("rules", "reviewed", "--session", sid, "--root", root, ok=True)
         out, _ = self.start("rv2", root)
         self.assertNotIn("RULE REVIEW: CLAUDE.md", self.ctx(out))
-        self.assertIn("commit-msg hook", self.text(root, "docs", "TASK_BACKLOG.md"))
+        self.assertIn("commit-msg hook", self.text(root, "docs", "IDEA_TASKS.md"))
 
     def test_task_files_found_by_content_moved_and_retired(self):
         bare = os.path.join(self.home, "tl.git")
@@ -668,7 +898,7 @@ class Cleanup(Base):
         self.assertNotIn("Friday", self.text(root, "CLAUDE.md"))
         self.assertIn("- Short answers.", self.text(root, "CLAUDE.md"))
         self.assertIn("set up the database", self.text(root, "docs", "COMPLETED_TASKS.md"))
-        self.assertIn("Script instead of a rule: short answers", self.text(root, "docs", "TASK_BACKLOG.md"))
+        self.assertIn("Script instead of a rule: short answers", self.text(root, "docs", "IDEA_TASKS.md"))
         self.assertIn("Retired (only listed tasks", self.text(root, "docs", "STATUS_ARCHIVE.md"))
         backups = os.path.join(self.home, ".claude", "session_guard_v2", "backups")
         self.assertFalse(any("list.md" in f for _, _, fs in os.walk(backups) for f in fs))   # no copy kept
@@ -678,7 +908,7 @@ class Cleanup(Base):
         q = [t for t in data["tasks"].values() if t["status"] == "queued"]
         self.assertEqual((q[0]["title"], q[0]["origin"][:7]), ("write docs", "pre-2.0"))
         self.assertEqual(data["ideas"]["PRE20-IDEA-001"]["text"], "dark theme")
-        self.assertIn("Not carried over (limit 10 queued tasks / 10 ideas): old wish",
+        self.assertIn("Not carried over (limit 50 queued tasks / 50 ideas): old wish",
                       self.text(root, "docs", "STATUS_ARCHIVE.md"))
         self.sg("migrate", "verify", root, ok=True)
         self.sg("migrate", "push", root, "--approval", "yes", ok=True)
@@ -716,7 +946,7 @@ class Cleanup(Base):
 
 
 class Limits(Base):
-    """Session Guard guards session cost, not project planning: 3+1 active, 10 queued, 10 ideas; rules by id."""
+    """10 active per working agent (+3 urgent), 50 queued, 50 ideas, each in its own generated file; rules by id."""
 
     def setUp(self):
         super().setUp()
@@ -726,34 +956,46 @@ class Limits(Base):
         return self.sg(*args, "--session", S1, "--root", self.root, ok=ok)
 
     def test_queue_and_idea_limits_duplicates_and_start(self):
-        for n in range(10):
-            self.s("task", "new", "--title", "queued work number %d about topic %s" % (n, "abcdefghij"[n] * 6),
-                   "--queue", "--approval", "ok", ok=True)
-        out = self.s("task", "new", "--title", "eleventh", "--queue", "--approval", "ok", ok=False)
-        self.assertIn("10 tasks already wait", out)
-        self.assertIn("open a separate project", out)
-        for n in range(9):                       # the migration brought one idea already
-            self.s("idea", "add", "idea %d on subject %s" % (n, "klmnopqrst"[n] * 6), ok=True)
-        self.assertIn("10 ideas already wait", self.s("idea", "add", "one more", ok=False))
+        def fill(store, d):
+            for n in range(49):
+                store.new_task(d, S1, unique("queued work", n), queue=True, approval="ok")   # TASK-002..TASK-050
+            for n in range(48):                                  # the migration brought one idea already
+                store.add_idea(d, S1, unique("idea", n))
+        in_store(self.root, fill)
+        self.s("task", "new", "--title", "the fiftieth queued task", "--queue", "--approval", "ok", ok=True)
+        self.assertIn("50 tasks already wait", self.s("task", "new", "--title", "fifty-first", "--queue",
+                                                      "--approval", "ok", ok=False))
+        self.s("idea", "add", "the fiftieth idea", ok=True)
+        self.assertIn("50 ideas already wait", self.s("idea", "add", "one more", ok=False))
         self.s("idea", "add", "Script instead of a rule: commit-msg hook", "--source", "rule-review", ok=True)
-        self.assertIn("near copy", self.s("task", "new", "--title", "queued work number 1 about topic bbbbbb",
-                                          "--approval", "ok", ok=True) and
-                      self.s("idea", "add", "idea 0 on subject kkkkkk", "--source", "rule-review", ok=False))
-        out = self.s("task", "start", "TASK-003", ok=True)
-        self.assertIn("started", out)
+        self.assertIn("near copy", self.s("idea", "add", "the fiftieth idea", "--source", "rule-review", ok=False))
+        self.assertIn("started", self.s("task", "start", "TASK-002", ok=True))
         status = self.text(self.root, "docs", "STATUS.md")
-        self.assertIn("Queued tasks 9/10", status)
-        self.assertLessEqual(len(status.splitlines()), 30)                          # lists live in the backlog
-        self.assertIn("## Queued tasks (9/10)", self.text(self.root, "docs", "TASK_BACKLOG.md"))
-        out = self.sg("task", "check", "--title", "queued work number 4 about topic eeeeee", "--root", self.root)
-        self.assertIn("queued 9/10 · ideas 10/10", out)
-        self.assertIn("TASK-006 task (queued", out)
+        self.assertIn("Queued tasks 49/50: docs/TASK_BACKLOG.md · ideas 50/50: docs/IDEA_TASKS.md", status)
+        backlog = self.text(self.root, "docs", "TASK_BACKLOG.md")
+        self.assertIn("## Queued tasks (49/50)", backlog)
+        self.assertIn("### TASK-003 · P2 · queued work 1", backlog)                 # one section per id
+        self.assertNotIn("IDEA-", backlog)                                          # ideas have their own file
+        ideas = self.text(self.root, "docs", "IDEA_TASKS.md")
+        self.assertIn("## Ideas (50/50)", ideas)
+        self.assertIn("## Rule review: scripts instead of rules (not counted)", ideas)
+        self.assertNotIn("### TASK-", ideas)
+        out = self.sg("task", "check", "--title", "queued work 4", "--root", self.root)
+        self.assertIn("queued 49/50 · ideas 50/50", out)
+        self.assertIn("- TASK-006 · P2 · queued work 4", out)
         bl = os.path.join(self.root, "docs", "TASK_BACKLOG.md")
         with open(bl, "a", encoding="utf-8") as fh:
-            fh.write("- a fresh thought about logging\n")
+            fh.write("- sneaked in by hand\n")
         self.hook("SessionStart", "lim", cwd=self.root)
         out = self.hook("PostToolUse", "lim", tool_name="Edit", tool_input={"file_path": bl}, cwd=self.root)
-        self.assertIn("10 ideas already wait", self.ctx(out))                        # limit holds for hand edits
+        self.assertIn("hand edit was undone", self.ctx(out))
+        self.assertNotIn("sneaked", self.text(bl))
+        il = os.path.join(self.root, "docs", "IDEA_TASKS.md")
+        with open(il, "a", encoding="utf-8") as fh:
+            fh.write("- a fresh thought about logging\n")
+        out = self.hook("PostToolUse", "lim", tool_name="Edit", tool_input={"file_path": il}, cwd=self.root)
+        self.assertIn("50 ideas already wait", self.ctx(out))                        # limit holds for hand edits
+        self.assertIn("- a fresh thought about logging", self.text(il))             # the refused bullet stays
 
     def test_rule_ids_and_rule_script_task(self):
         cm = os.path.join(self.root, "CLAUDE.md")
@@ -833,11 +1075,11 @@ class Migration(Base):
         root = self.project("pl")
         self.sg("migrate", "discover", "--add", root, ok=True)
         plan = os.path.join(self.home, "plan.json")
-        json.dump({"tasks": [{"title": "t%d" % n} for n in range(4)]}, open(plan, "w"))
-        self.assertIn("at most 3", self.sg("migrate", "apply", root, "--plan", plan, "--session", S3,
+        json.dump({"tasks": [{"title": "t%d" % n} for n in range(11)]}, open(plan, "w"))
+        self.assertIn("at most 10", self.sg("migrate", "apply", root, "--plan", plan, "--session", S3,
                                                           ok=False))
         self.sg("migrate", "survey", root, ok=True)
-        self.assertIn("at most 3", self.sg("migrate", "apply", root, "--plan", plan, "--session", S3, ok=False))
+        self.assertIn("at most 10", self.sg("migrate", "apply", root, "--plan", plan, "--session", S3, ok=False))
         self.assertFalse(os.path.exists(os.path.join(root, ".claude", "session-guard2", "store.json")))
 
     def test_budget_pause_and_continue_installation(self):

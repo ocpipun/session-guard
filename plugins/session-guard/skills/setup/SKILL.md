@@ -28,7 +28,7 @@ explicit yes in this conversation; every push needs its own yes.
    lines that repeat a status or task line. If an old session of that project still runs and is reachable, ask it
    for its hand-off instead. The report: current goal, finished work, open work, contradictions, unknowns, and
    which CLAUDE.md rules a script or hook could check. Do not rebuild old sessions' hand-offs one by one.
-3. Write the plan JSON (`sg migrate plan-help`): at most 3 active tasks, 10 queued tasks, 10 ideas; finished
+3. Write the plan JSON (`sg migrate plan-help`): at most 10 active tasks, 50 queued tasks, 50 ideas; finished
    items as "completed" (they get PRE20-DONE-xxx ids, ideas PRE20-IDEA-xxx, imported tasks are marked pre-2.0);
    what does not fit in "not_carried" (archived, shown to the user). Files that ONLY listed tasks go into
    "retire" (deleted whole, no copy); task text inside files used for other things too goes into "remove_text"

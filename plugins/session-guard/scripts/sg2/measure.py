@@ -14,7 +14,7 @@ from datetime import datetime
 from . import core
 
 K = core.K
-NORMAL_LIMIT, LONG_LIMIT, BREAK_CONTEXT, BREAK_SECONDS = 400 * K, 900 * K, 100 * K, 3600
+NORMAL_LIMIT, LONG_LIMIT, BREAK_CONTEXT, BREAK_SECONDS = 400 * K, 900 * K, 175 * K, 3600
 TAIL_BYTES = 4 * 1024 * 1024
 PENDING_MAX = 24 * 3600
 
@@ -173,7 +173,7 @@ def read_transcript(path):
 
 def break_decision(reading, long_mode, finishing):
     """None, ("remind", gap) or ("lock", gap). The v1.4 break rule: normal mode, no own background job, gap over
-    one hour; over 100k context the message is not run."""
+    one hour; over 175k context the message is not run."""
     if long_mode or finishing or reading.pending or reading.last_reply is None:
         return None
     gap = time.time() - reading.last_reply
@@ -278,13 +278,85 @@ def quota_cleared(info):
                 reading.get("used_percent", 0) < STOP_AT.get(info.get("window"), 100))
 
 
+# --- break measurement: an option for the whole computer, off by default (user decisions 2026-11-05) -----------
+# `sg breaks on` / `sg breaks off` (~/.claude/session_guard_v2/options.json, every session and project): after a gap
+# over one hour Claude reads the quota twice in that turn; with the last reading from before the break it goes as one
+# row into break_measurements.jsonl on this computer. Nothing is sent anywhere. `sg breaks show` lists the rows.
+PROBE_READ = ("[Session Guard] BREAK MEASUREMENT (the user turned it on): call the tool %s twice in this turn: once now "
+              "(in parallel with your next tool call, or alone), and once more as the very last tool call before your "
+              "closing message. Session Guard reads the results itself; do not mention it to the user." % USAGE_TOOL)
+
+
+def options_path():
+    return os.path.join(core.state_dir(), "options.json")
+
+
+def probe_path():
+    return os.path.join(core.state_dir(), "break_measurements.jsonl")
+
+
+def probe_on():
+    return bool(core.read_json(options_path(), {}).get("measure_breaks")) and desktop()
+
+
+def set_probe(on):
+    data = core.read_json(options_path(), {})
+    data = data if isinstance(data, dict) else {}
+    data["measure_breaks"] = bool(on)
+    core.write_json(options_path(), data)
+
+
+def quota_snapshot():
+    t = time.time()
+    return {n: {"percent": r.get("used_percent"), "age_min": int((t - r.get("read_at", t)) // 60),
+                "resets_at": r.get("resets_at")} for n, r in readings().items()}
+
+
+def start_probe(rec, reading, gap, long_mode, rule):
+    rec["break_probe"] = {"at": core.iso(), "gap_min": int(gap // 60), "context": reading.context,
+                          "mode": "long" if long_mode else "normal", "rule": rule or "none",
+                          "before": quota_snapshot(), "after": []}
+
+
+def probe_reading(rec):
+    """A quota reading during the measured turn; the second one closes the row."""
+    probe = rec.get("break_probe")
+    if not probe:
+        return
+    probe["after"].append(quota_snapshot())
+    if len(probe["after"]) >= 2:
+        close_probe(rec)
+
+
+def close_probe(rec):
+    probe = rec.pop("break_probe", None)
+    if probe:
+        core.append_text(probe_path(), json.dumps(dict(probe, session=rec.get("sg_id"),
+                                                       signature="SESSION-GUARD: 2.0")) + "\n")
+
+
+def probe_rows():
+    rows = []
+    for line in (core.read_text(probe_path()) or "").splitlines():
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            pass
+    return rows
+
+
 def clock(epoch):
     return datetime.fromtimestamp(epoch).strftime("%H:%M" if epoch - time.time() < 20 * 3600 else "%a %H:%M")
 
 
+def desktop():
+    """The usage tool exists only in the desktop app. UNVERIFIED: CLAUDE_CODE_ENTRYPOINT is not in the official docs
+    (seen in Bash, v1.4)."""
+    return not core.in_cloud() and os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "claude-desktop"
+
+
 def needs_reading(state, during_work):
-    """Desktop app only. UNVERIFIED: CLAUDE_CODE_ENTRYPOINT is not in the official docs (seen in Bash, v1.4)."""
-    if core.in_cloud() or os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop":
+    if not desktop():
         return False
     found, t = readings(), time.time()
     high = any(r.get("used_percent", 0) >= ASK_AT[n] for n, r in found.items())

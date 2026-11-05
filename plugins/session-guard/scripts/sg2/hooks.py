@@ -27,9 +27,6 @@ WATCH_SECONDS = int(os.environ.get("SESSION_GUARD_WATCH_SECONDS") or 24 * 3600)
 WATCH_STEP = 60
 EXECUTIVE = "session-guard-executive"
 STORE_DIR_MARK = core.PROJECT_DIRNAME.replace("\\", "/")
-STATUS_LONG = ("STATUS.md IS %d LINES (LIMIT 50). Before any new task: move old notes out of the \"Notes\" section "
-               "(a line that will matter later goes to STATUS_ARCHIVE.md as one dated line) and close finished tasks. "
-               "If open work keeps it over 50, refuse new tasks until the pending ones are finished.")
 STALE_JOBS = ("WARNING (24 hours): %d background job(s) or subagent(s) started over 24 hours ago never reported back. "
               "Tell the user in one line: a bug may have occurred. Check the job if you can. If it is stuck, suggest "
               "\"finish session\".")
@@ -101,6 +98,85 @@ def is_executive(root):
 
 def subagent(inp):
     return bool(inp.get("agent_id"))
+
+
+PARENT_MARK = re.compile(r"^\s*SG-PARENT:\s*(S-\d{8}-[0-9a-f]{6}(?:-[BI]\d+)*)[ \t]*(bound|independent)?\s*$",
+                         re.M | re.I)
+CHILD_TEXT = {
+    "bound": "a BOUND child session agent: you work only on subtasks of %s's work (`sg task new --parent <its "
+             "task>`), never a main task of your own. When %s hands off, you hand off first and this session is "
+             "locked with it.",
+    "independent": "an INDEPENDENT child session agent: your own main tasks (with the user's approval words from the "
+                   "brief), never %s's work or its subtasks. If %s stops, you go on; Session Guard then tells you."}
+
+
+def child_session(root, rec, prompt):
+    """A session started from another one: its brief carries the line "SG-PARENT: <id> bound|independent". Before
+    it owns anything it gets the id <parent>-B<n> or <parent>-I<n>; the first id stays an alias."""
+    m = PARENT_MARK.search(prompt or "")
+    if not (m and root and rec.get("sg_id")):
+        return None
+    if not m.group(2):
+        return ("[Session Guard 2.0] The SG-PARENT line has no kind, so this session is NOT a child session of %s. "
+                "Tell the user in one line: the line must end with `bound` (it helps with the parent's work and is "
+                "locked with it) or `independent` (its own work, it goes on); they can send it again." % m.group(1))
+    old, kind = rec["sg_id"], m.group(2).lower()
+    try:
+        new = store.mutate(root, lambda d: store.make_child(d, old, m.group(1), kind), render=False)
+    except (store.Refused, core.Busy):
+        return None
+    if not new:
+        return None
+    rec["sg_id"] = new
+    return ("[Session Guard 2.0] CHILD SESSION: your SESSION-ID is %s (started from %s; %s stays its alias, so "
+            "$SG_SESSION_ID keeps working). You are %s The same rules as any session apply: limits, thresholds and "
+            "hand-offs." % (new, m.group(1), old, CHILD_TEXT[kind] % (m.group(1), m.group(1))))
+
+
+def parent_note(data, rec):
+    """Once, when the session this one was started from hands off or stops. A bound child session agent hands off
+    and is locked with it; an independent one is told and goes on; a continuation took over its work: no note."""
+    sid = rec.get("sg_id") or ""
+    me = (data or {}).get("sessions", {}).get(sid) or {}
+    par = data["sessions"].get(me.get("parent") or "") if me else None
+    if not par or "parent_handoff" in rec["notified"] or "parent_stopped" in rec["notified"] or \
+            store.child_kind(data, sid) == "continuation":
+        return None
+    why = ("handing off" if par.get("handing_off") else None) or (par.get("stopped") or {}).get("reason") or \
+        (par.get("lock_reason") if par["state"] == "locked" else "ended" if par["state"] == "ended" else None)
+    if not why:
+        return None
+    if store.child_kind(data, sid) == "bound":
+        rec["notified"].append("parent_handoff")
+        return ("[Session Guard 2.0] PARENT SESSION %s HANDS OFF (%s). You are a BOUND child session agent (you own "
+                "only subtasks of its work): stop the work now. Bring each task you own to a hand-off-ready point "
+                "and write its hand-off (`%s handoff write <id> --technical \"...\"`: branch and PR are recorded; add "
+                "--pr <link> if missing), then `%s handoff publish`. Do nothing else: this session is locked once "
+                "every hand-off is written. Tell the user in one line." % (par["id"], why, sg_cmd(), sg_cmd()))
+    rec["notified"].append("parent_stopped")
+    return ("[Session Guard 2.0] PARENT SESSION %s HANDS OFF / STOPPED (%s). You are an INDEPENDENT child session "
+            "agent (your own main task): you go on under the same rules; its reports no longer reach it. Keep your "
+            "task notes current (`%s task note`), so the next session of the parent's work sees where you are." % (
+                par["id"], why, sg_cmd()))
+
+
+def with_parent_lock(rec, data):
+    """A bound child session agent is locked as soon as every task it owns has its hand-off."""
+    if "parent_handoff" not in rec["notified"] or not data or store.missing_handoffs(data, rec.get("sg_id")):
+        return False
+    me = data["sessions"].get(rec.get("sg_id") or "") or {}
+    sessions.lock(rec, "handed", "handed off with its parent %s" % me.get("parent"), by=me.get("parent"))
+    return True
+
+
+def stop(root, rec, kind, reason):
+    """A permanent lock (context, finish, break), also marked in the store for the sessions started from this one."""
+    sessions.lock(rec, kind, reason)
+    if root and rec.get("sg_id") and store.is_project(root):
+        try:
+            store.mutate(root, lambda d: store.mark_stopped(d, rec["sg_id"], "%s: %s" % (kind, reason)), render=False)
+        except (store.Refused, core.Busy):
+            pass
 
 
 # --- session start ---------------------------------------------------------------------
@@ -208,9 +284,6 @@ def start_context(root, rec, data, source):
         status = core.exists_ci(root, "docs/STATUS.md")
         if status:
             parts.append("docs/STATUS.md (already loaded, do not read again):\n\n" + (core.read_text(status) or "")[:8000])
-        n = render.status_lines(root)
-        if n > render.STATUS_MAX_LINES:
-            parts.append("[Session Guard] " + STATUS_LONG % n)
     else:
         parts.append(head)
         if root:
@@ -237,9 +310,18 @@ def on_session_start(inp):
         return emit(inactive(act, "SessionStart"))
     reading = measure.read_transcript(inp.get("transcript_path"))
     rec, known = sessions.load(cid, reading.ids)
+    forked_from = None
+    if known and source == "fork" and rec.get("continues") and rec["continues"] != cid:
+        # /fork, /branch, --fork-session: both conversations may go on, so the fork is its own session. It keeps the
+        # mode (long mode included), the notices and the locks: it carries the same context.
+        forked_from, rec["sg_id"], rec["born"] = rec["sg_id"], core.new_session_id(), core.now()
     if not known:
         rec["sg_id"] = core.new_session_id()
         rec["born"] = core.now() if source in ("startup", "clear", "fork") else (reading.first_at or 0)
+    if source == "compact":
+        # Claude Code summarized the conversation: the context is small again, so the one-time notices fire again
+        # as it grows. Hand-off steps stay recorded (a hand-off is not written twice).
+        rec["notified"] = [n for n in rec["notified"] if n not in measure.NOTIFY_ONCE]
     rec.update(self=ENTRY, root=root, place=core.place())
     data = store.load(root) if root else None
     if data:
@@ -260,8 +342,14 @@ def on_session_start(inp):
     write_env(rec, root)
     if data:
         try:
-            store.mutate(root, lambda d: store.register_session(d, rec["sg_id"], cid, core.place()), render=False)
+            store.mutate(root, lambda d: store.register_session(d, rec["sg_id"], cid, core.place(), parent=forked_from),
+                         render=False)
             data = store.load(root)
+            if not core.exists_ci(root, "docs/IDEA_TASKS.md"):  # ideas used to live in TASK_BACKLOG.md
+                with core.FileLock(store.lock_path(root)):
+                    render.render_backlog(root, data)
+                    render.render_ideas(root, data)
+                    render.render_status(root, data)
         except (store.Refused, core.Busy):
             pass
     elif root:
@@ -270,6 +358,14 @@ def on_session_start(inp):
         except (OSError, core.Busy):
             pass
     out = start_context(root, rec, data, source)
+    if source == "compact":
+        out += ("\n\n[Session Guard 2.0] COMPACTED: Claude Code summarized this conversation. What is not in the "
+                "files may be lost: before going on, read your open tasks with `%s task show <id>` (the rules and "
+                "STATUS above are current). The context is measured again from now on." % sg_cmd())
+    if forked_from:
+        out += ("\n\n[Session Guard 2.0] FORK of session %s: this conversation is a new session (%s) with the same "
+                "context and mode. It owns no task yet: the tasks stay with %s unless the user says otherwise." % (
+                    forked_from, rec["sg_id"], forked_from))
     merged = []
     if data and gitops.is_repo(root) and (core.in_cloud() or any(
             (t.get("work") or {}).get("mode") == "side-branch" for t in data["tasks"].values())):
@@ -308,7 +404,7 @@ def block(text):
 def handed_lock(rec, data):
     srec = (data or {}).get("sessions", {}).get(rec.get("sg_id") or "")
     if srec and srec["state"] == "locked" and "handed" not in rec["locks"]:
-        found = re.search(r" to (S-\d{8}-[0-9a-f]{6})", srec.get("lock_reason") or "")
+        found = re.search(r" to (S-\d{8}-[0-9a-f]{6}(?:-C\d+)*)", srec.get("lock_reason") or "")
         sessions.lock(rec, "handed", srec.get("lock_reason") or "handed over",
                       by=found.group(1) if found else "another session")
         return True
@@ -359,16 +455,22 @@ def on_prompt(inp):
 
     notes, user = [], []
     refused = None
+    finish = measure.has_command(measure.FINISH, prompt)
+    if finish and measure.handed(rec):
+        refused, finish = msg("finish_refused", k=measure.handed(rec)), False
+    # The break is decided by the mode the session had before this message: "start long mode" after a long break
+    # does not skip the break rule (bug found on v1.4, 2026-11-05).
+    br = None if finish else measure.break_decision(reading, rec["long"], finish)
+    was_long, long_skipped = rec["long"], False
     if measure.has_command(measure.LONG, prompt) and not rec["long"]:
         if measure.handed(rec):
             refused = msg("long_refused")
+        elif br and br[0] == "lock":
+            long_skipped = True
         else:
             rec["long"] = True
             notes.append("LONG MODE is on for this session (cannot be switched off). Confirm it to the user in one line.")
     long_mode = rec["long"]
-    finish = measure.has_command(measure.FINISH, prompt)
-    if finish and measure.handed(rec):
-        refused, finish = msg("finish_refused", k=measure.handed(rec)), False
     gap = time.time() - reading.last_reply if reading.last_reply else None
     line = "[Session Guard] Context: %s (last reply). Mode: %s. Since last reply: %s.%s" % (
         measure.kfmt(reading.context), "LONG" if long_mode else "normal",
@@ -376,37 +478,54 @@ def on_prompt(inp):
         " Background jobs still running: %d (break rule off)." % reading.pending if reading.pending else "")
     limit = measure.LONG_LIMIT if long_mode else measure.NORMAL_LIMIT
     if reading.context is not None and reading.context >= limit and not finish:
-        sessions.lock(rec, "context", "context %s" % measure.kfmt(reading.context))
+        stop(root, rec, "context", "context %s" % measure.kfmt(reading.context))
         sessions.save(rec, reading.ids)
         return block(msg("hard_limit", k=measure.kfmt(reading.context)))
     if refused:
         sessions.save(rec, reading.ids)
         return block(refused)
 
+    child = child_session(root, rec, raw_prompt) if data else None
+    if child:
+        notes.append(child)
+        data = store.load(root)
     sid = rec["sg_id"]
+    if data and not finish:
+        r = parent_note(data, rec)
+        if r:
+            notes.append(r)
     if finish:
-        sessions.lock(rec, "finish", "finish session")
+        stop(root, rec, "finish", "finish session")
         notes.append('FINISH SESSION. Do nothing else the message asks. Only skill session-guard "Finish session": %s.'
                      '%s The session is locked after this reply.' % (handoff_todo(data, sid), measure_todo(root)))
         user.append(msg("finishing"))
     else:
-        br = measure.break_decision(reading, long_mode, finish)
         if br and br[0] == "lock":
-            sessions.lock(rec, "break", "break over 1 hour, context %s" % measure.kfmt(reading.context))
+            stop(root, rec, "break", "break over 1 hour, context %s" % measure.kfmt(reading.context))
             if data:
                 try:
                     store.mutate(root, lambda d: store.record_user_command(d, sid, raw_prompt))
                 except (store.Refused, core.Busy):
                     pass
-            notes.append("BREAK RULE (gap %d min, context %s > 100k). Do NOT run the user's command and do no reading or "
+            notes.append("BREAK RULE (gap %d min, context %s > 175k). Do NOT run the user's command and do no reading or "
                          "research for it. Only skill session-guard \"Break hand-off\": %s. Session Guard stored the "
                          "command word for word. Tell the user to continue in a new session. The session is locked "
-                         "after this reply." % (br[1] // 60, measure.kfmt(reading.context), handoff_todo(data, sid)))
+                         "after this reply.%s" % (br[1] // 60, measure.kfmt(reading.context), handoff_todo(data, sid),
+                                                  " LONG MODE was NOT turned on: the break rule comes first; tell the "
+                                                  "user it can be started in the new session." if long_skipped else ""))
             user.append(msg("break_lock", k=measure.kfmt(reading.context)))
         elif br:
-            notes.append("BREAK REMINDER: gap over 1 hour (%d min), context %s <= 100k. Remind the user in one line, "
+            notes.append("BREAK REMINDER: gap over 1 hour (%d min), context %s <= 175k. Remind the user in one line, "
                          "then handle the command normally." % (br[1] // 60, measure.kfmt(reading.context)))
             user.append(msg("break_remind", k=measure.kfmt(reading.context)))
+    probe = False
+    if rec.get("break_probe"):
+        measure.close_probe(rec)  # the turn after a measured one: what was read is written
+    if not finish and not PROJECT_MODE and gap is not None and gap > measure.BREAK_SECONDS and not reading.pending \
+            and measure.probe_on():
+        measure.start_probe(rec, reading, gap, was_long, br[0] if br else None)
+        notes.append(measure.PROBE_READ)
+        probe = True
     if reading.stale and not sessions.closed(rec):
         notes.append(STALE_JOBS % reading.stale)
         if "stale24" not in rec["notified"]:
@@ -430,16 +549,13 @@ def on_prompt(inp):
             notes.append(measure.QUOTA_STOP % (dict(measure.WINDOWS)[hit[0]], hit[1]["used_percent"],
                                                measure.clock(hit[1]["resets_at"])))
             user.append(quota_text(rec["locks"]["quota"], "quota_stop"))
-        elif measure.needs_reading(rec, False):
+        elif measure.needs_reading(rec, False) and not probe:
             notes.append(measure.READ_USAGE)
     if data:
         restored = restore_status(root)
         if restored:
             notes.append(restored)
             user.append(msg("status_restored"))
-        n = render.status_lines(root)
-        if n > render.STATUS_MAX_LINES and not finish:
-            notes.append(STATUS_LONG % n)
     notes += budget_notes(cid, reading, rec)
     sessions.save(rec, reading.ids)
     if not notes and not head:
@@ -455,7 +571,8 @@ def closed_now(rec, data):
     or the project was migrated after this conversation began."""
     if sessions.closed(rec):
         return True
-    return handed_lock(rec, data) or legacy_check(rec, data) or home_check(rec, data)
+    return handed_lock(rec, data) or with_parent_lock(rec, data) or legacy_check(rec, data) or \
+        home_check(rec, data)
 
 
 def handoff_todo(data, sid):
@@ -463,9 +580,13 @@ def handoff_todo(data, sid):
         return "hand-off as the skill says (this project is not on 2.0 yet: no task ids)"
     missing = store.missing_handoffs(data, sid)
     mine = [t["id"] for t in store.owned_open(data, sid)]
+    kids = store.children_of(data, sid)
+    first = ("FIRST `%s handoff children`: your child session agents (%s) are told, and the bound ones write their "
+             "hand-offs before yours (it prints the message to send them); " % (sg_cmd(), ", ".join(c for c, _ in kids))
+             if kids else "")
     if not mine:
-        return "you own no open task: no hand-off needed"
-    return ("tasks you own: %s; hand-off still missing for: %s. First bring each task's work to a hand-off-ready "
+        return first + "you own no open task: no hand-off needed"
+    return first + ("tasks you own: %s; hand-off still missing for: %s. First bring each task's work to a hand-off-ready "
             "point (finish the small step in progress, leave nothing half-written), then `%s handoff write <id> "
             "--technical ...`%s, then `%s handoff publish`" % (
                 ", ".join(mine), ", ".join(missing) or "none", sg_cmd(),
@@ -490,7 +611,7 @@ def restore_status(root):
 
 
 def absorb_notes(root, sid, name="STATUS.md", heading="## notes"):
-    """Bullets written by hand under "## Notes" of STATUS.md or "## Add an idea" of TASK_BACKLOG.md become ideas
+    """Bullets written by hand under "## Notes" of STATUS.md or "## Add an idea" of IDEA_TASKS.md become ideas
     with temporary ids (IDEA-xxx), checked against the existing work; nothing waits without an id. A bullet the
     idea limit or the duplicate check refuses stays, with the reason."""
     path = render.doc(root, name)
@@ -528,7 +649,7 @@ def absorb_notes(root, sid, name="STATUS.md", heading="## notes"):
             with core.FileLock(store.lock_path(root)):
                 data = store.load(root)
                 render.render_status(root, data)
-                render.render_backlog(root, data)
+                render.render_ideas(root, data)
         except core.Busy:
             pass
     return "[Session Guard 2.0] %s %s: %s%s" % (name, heading.strip("# ").title(),
@@ -579,8 +700,45 @@ def tool_path(inp):
     return str(args.get("file_path") or args.get("notebook_path") or "")
 
 
+def deny(reason):
+    return emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                        "permissionDecisionReason": reason}})
+
+
+SG_MAIN_WORK = re.compile(r"session_guard\.py\S*\s.*\b(?:task\s+(?:new|start|claim|reopen)|idea\s+promote)\b")
+
+
+def subagent_check(inp):
+    """A subagent works only on a subtask of a task its session owns: the session cannot hand it a new, independent
+    task (user decision 2026-11-04). web-fetch only reads a page (it stands in for a tool) and needs no task."""
+    if inp.get("tool_name") == "Bash":
+        cmd = str((inp.get("tool_input") or {}).get("command") or "")
+        if subagent(inp) and SG_MAIN_WORK.search(cmd) and not (" new" in cmd and "--parent" in cmd):
+            return deny("Session Guard 2.0: a subagent opens, starts or claims no main task; it works only on the "
+                        "subtask it was given. Report back to the session that started you.")
+        return 0
+    args, root = inp.get("tool_input") or {}, core.project_root(inp)
+    if args.get("subagent_type") == "web-fetch" or not (root and store.is_project(root)):
+        return 0
+    rec, known = sessions.load(inp.get("session_id"))
+    data = store.load(root)
+    sid = rec.get("sg_id") if known else None
+    mine = {t["id"] for t in store.owned_open(data, sid)} if sid else set()
+    named = set(core.TASK_ID_ANY.findall(str(args.get("prompt") or "")))
+    subtasks = {t for t in named & mine if data["tasks"][t]["parent"]}
+    if subtasks:
+        return 0
+    return deny("Session Guard 2.0: give a subagent only a subtask of a task you own. Open it first (`%s task new "
+                "--parent <your TASK-ID> --title \"...\"`), then name the subtask id (TASK-xxx-n) in the subagent's "
+                "prompt. A new, independent task never goes to a subagent: it needs the user's approval and is yours "
+                "(or a queued task / an idea). Subtasks do not count toward the limits." % sg_cmd())
+
+
 def on_pre_tool(inp):
-    """The task store is changed only through `sg` (lock, ownership, revision): direct edits are refused."""
+    """The task store is changed only through `sg` (lock, ownership, revision): direct edits are refused. Subagents
+    get only subtasks."""
+    if inp.get("tool_name") in ("Agent", "Task", "Bash"):
+        return subagent_check(inp)
     if inp.get("tool_name") not in EDIT_TOOLS:
         return 0
     p = tool_path(inp).replace("\\", "/")
@@ -601,6 +759,9 @@ def on_tool(inp):
     cid = inp.get("session_id")
     reading = measure.read_transcript(inp.get("transcript_path"))
     rec, known = sessions.load(cid, reading.ids)
+    if known and inp.get("tool_name") == measure.USAGE_TOOL and rec.get("break_probe") and not subagent(inp):
+        measure.probe_reading(rec)  # before the lock check: a break hand-off turn is measured too
+        sessions.save(rec, reading.ids)
     if not known or sessions.closed(rec):
         return 0
     quota = rec["locks"].get("quota")
@@ -621,13 +782,21 @@ def on_tool(inp):
         for r in (restore_status(root), absorb_notes(root, rec.get("sg_id")), tidy_status(root)):
             if r:
                 extra.append(r)
-    if edited and os.path.basename(edited).lower() == "task_backlog.md" and root and store.is_project(root):
-        r = absorb_notes(root, rec.get("sg_id"), "TASK_BACKLOG.md", render.ADD_IDEA.lower())
+    name = os.path.basename(edited).lower() if edited else ""
+    if name in ("task_backlog.md", "idea_tasks.md") and root and store.is_project(root):
+        r = absorb_notes(root, rec.get("sg_id"), "IDEA_TASKS.md", render.ADD_IDEA.lower()) \
+            if name == "idea_tasks.md" else None
+        before = core.read_text(edited)
+        with core.FileLock(store.lock_path(root)):
+            data = store.load(root)
+            render.render_backlog(root, data) if name == "task_backlog.md" else render.render_ideas(root, data)
         if r:
             extra.append(r)
-        else:
-            with core.FileLock(store.lock_path(root)):
-                render.render_backlog(root, store.load(root))  # the backlog is generated: a hand edit is undone
+        elif core.read_text(edited) != before:  # both files are generated: a hand edit is undone
+            extra.append("[Session Guard 2.0] docs/%s is generated from the task store; the hand edit was undone. "
+                         "Queued tasks: `sg task new --queue --approval`; ideas: `sg idea add` or a bullet under "
+                         "\"%s\" in docs/IDEA_TASKS.md. Change entries by their id, never by line number." % (
+                             "TASK_BACKLOG.md" if name == "task_backlog.md" else "IDEA_TASKS.md", render.ADD_IDEA))
     if edited and root and core.key(edited) == core.key(os.path.join(root, "CLAUDE.md")) and store.is_project(root):
         text = core.read_text(edited)
         if text and render.tidy(text) != text:
@@ -635,6 +804,10 @@ def on_tool(inp):
             extra.append("[Session Guard 2.0] CLAUDE.md: empty lines or empty bullets left by an edit were removed. "
                          "Edit CLAUDE.md by section and rule id, never by line number.")
         r = rule_review(root, store.load(root), rec)
+        if r:
+            extra.append(r)
+    if root and store.is_project(root):
+        r = parent_note(store.load(root), rec)
         if r:
             extra.append(r)
     turn = "turn24:%s" % reading.prompt_at
@@ -649,7 +822,7 @@ def on_tool(inp):
             measure.kfmt(reading.context), step[2], measure.NOTICE_FORM % (step[0] // core.K)
             + (measure_todo(root) if step[1] in measure.MEASURE_STEPS else "")), msg(step[1]))
         if step[3]:
-            sessions.lock(rec, "context", "context %s" % measure.kfmt(reading.context))
+            stop(root, rec, "context", "context %s" % measure.kfmt(reading.context))
             data.update({"continue": False, "stopReason": msg(step[1])})
         sessions.save(rec, reading.ids)
         return emit(data)
@@ -679,7 +852,7 @@ def on_stop(inp):
         return 0
     rec, known = sessions.load(inp.get("session_id"))
     if not known or rec.get("stop_blocks", 0) >= 2 or not (
-            {"finish", "break"} & set(rec["locks"]) or measure.handed(rec)):
+            {"finish", "break"} & set(rec["locks"]) or measure.handed(rec) or "parent_handoff" in rec["notified"]):
         return 0
     data = store.load(root) if root else None
     if not data:

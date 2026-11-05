@@ -31,11 +31,18 @@ gives Claude an instruction only when a threshold is passed. Claude never acts o
 
 ## 2. Breaks
 Normal mode, more than 1 hour since Claude's last reply:
-- context over 100k: the message is **not** run. Session Guard stores it word for word in each task's hand-off,
+- context over 175k: the message is **not** run. Session Guard stores it word for word in each task's hand-off,
   Claude hands off and the session is locked;
-- 100k or less: a one-line reminder, then the message runs.
+- 175k or less: a one-line reminder, then the message runs.
 
-Waiting for Claude's own background job is not a break. Long mode has no break rule.
+Waiting for Claude's own background job is not a break. Long mode has no break rule; "start long mode" written
+right after such a break does not skip it (the session hands off first).
+
+**Break measurement (optional, off by default).** To see what a resumed break costs you, ask Claude to run
+`sg breaks on`. It applies to every session and project on this computer until you run `sg breaks off`. After each
+gap over 1 hour Claude reads your quota (desktop app only) at the start and at the end of that turn; with the last
+reading before the break it is written as one row to `~/.claude/session_guard_v2/break_measurements.jsonl`.
+Nothing leaves your computer. `sg breaks show` lists the rows. Each reading costs a few tokens.
 
 ## 3. Finish session
 `finish session` (at the start of a message followed by a comma or period, or at its end): Claude does nothing
@@ -65,18 +72,37 @@ A 24-hour watch tells the user when a turn or a background job has been running 
   `TASK-001`, subtasks `TASK-001-1`, `TASK-001-2-1`. Ids are never reused.
 - **Ownership:** only a task's owner changes it. A free task (no owner, owner ended or locked, or a hand-off
   waiting) can be claimed; a task of an active session only with the user's approval. Owner history is kept.
-- **Limits:** at most 3 normal main tasks, plus 1 urgent one (with a reason and the user's approval) when 3 are
-  active; 10 queued tasks; 10 ideas (temporary ids IDEA-xxx, replaced by the task id when an idea becomes a task).
-  One prompt can bring at most 24; Claude splits a multi-step prompt into this form. Subtasks, setup, migration
-  and rule-script work are not counted. Over the limits Claude tells the user to finish the waiting work first and
-  to plan in a separate project: Session Guard optimizes session cost, it does not manage the project.
-- **No duplicate work:** a new task or idea is compared with every existing one (running, queued, finished,
-  ideas); a near copy is refused, related ones are shown so Claude checks for conflicts or bugs and warns the user.
-- **Waiting work outside STATUS:** queued tasks and ideas are listed in `docs/TASK_BACKLOG.md`; STATUS only shows
-  their counts, so it stays short. A bullet written under "## Add an idea" there (or under a "## Notes" heading of
-  STATUS) becomes an idea with an id and is checked against the existing work.
-- **Every new work request is checked first:** `sg task check` shows the limits and the related running, queued
-  and finished tasks and ideas, so overlapping, conflicting or contradicting work is found before it starts.
+- **Limits:** at most 10 normal and 3 urgent main tasks (urgent: with a reason and the user's approval) for each
+  agent working in the project at the same time (two agents: 20 + 6), 50 queued tasks, 50 ideas (temporary ids
+  IDEA-xxx, replaced by the task id when an idea becomes a task). A multi-step project or a bulk prompt is split
+  by Claude into this form. Subtasks, setup, migration and rule-script work are not counted. Over a limit Claude
+  tells the user to finish or drop waiting work first.
+- **Urgent first:** an urgent task goes to the top of the list and belongs to its agent: while it is active,
+  that agent takes no new task (new requests are recorded as ideas); other agents go on.
+- **Subagents get only subtasks:** a subagent (Agent tool) is launched only with a subtask of a task its session
+  owns, named in its prompt; Session Guard refuses other launches, and a subagent cannot open a main task.
+  Subagents and subtasks are not counted; a subagent may hand off and close its own subtask.
+- **Child session agents:** a session started from another one is a separate agent under the same rules. Its
+  kind is fixed at its start by the brief line `SG-PARENT: <id> bound` or `SG-PARENT: <id> independent`:
+  - *Bound* (`<parent>-B<n>`): helps with the parent's work (a test, a part of it) and works only on subtasks of
+    the parent's tasks. Before the parent hands off, `sg handoff children` lists its bound children and the message
+    to send them; the parent writes its hand-off only after theirs, and they are locked with it.
+  - *Independent* (`<parent>-I<n>`): its own main tasks, never the parent's work. When the parent stops, Session
+    Guard tells it to make its work hand-off-ready (branch and PR in its hand-off) and it goes on.
+  - The kinds never take each other's work. A session that takes over a hand-off is a continuation, not a child.
+- **Compaction and forks:** after Claude Code compacts a conversation, Session Guard gives the rules and STATUS
+  again, measures the smaller context and lets the one-time notices fire again. A fork (/fork, /branch) becomes a
+  new session that keeps the mode (long mode too) and the context.
+- **No duplicate work:** when the user gives new work (a bulk prompt at project start, or new tasks later),
+  `sg task check` lists every running, urgent and queued task and idea, finished work sharing words with the new
+  items (pre-2.0 items found by keywords) and near copies. Claude compares them and explains any overlap,
+  conflict, contradiction or near copy to the user in their language; a near copy is refused.
+- **Waiting work outside STATUS:** queued tasks are in `docs/TASK_BACKLOG.md`, ideas in `docs/IDEA_TASKS.md`; both
+  are generated, one section per id, so entries change by id, never by line number. STATUS only shows their
+  counts, so it stays short. A bullet written under "## Add an idea" in IDEA_TASKS.md (or under a "## Notes"
+  heading of STATUS) becomes an idea with an id and is checked against the existing work.
+- **What is read when:** session start CLAUDE.md and STATUS.md; new work only the check above; the archive only
+  when needed, by search (2.0 entries by id, pre-2.0 entries by keywords).
 - **New id when needed:** continuing a task keeps its id; redoing a wrongly finished task or extending a finished
   one is a new task linked to the old one. A finished subtask never finishes its parent.
 - **Safe parallel writes:** one lock per project store, a fresh read inside the lock, revision checks; direct edits
@@ -106,9 +132,10 @@ open task. Claimed hand-offs go to `STATUS_ARCHIVE.md`.
 | File | Role |
 |---|---|
 | `CLAUDE.md` | permanent rules and decisions |
-| `docs/STATUS.md` | current state; task block generated by Session Guard; at most 50 lines (no new task above it) |
+| `docs/STATUS.md` | current state; task block generated by Session Guard; no line limit (the limits are task counts) |
 | `docs/STATUS_ARCHIVE.md` | history, append only; never read at session start, only searched |
-| `docs/TASK_BACKLOG.md` | waiting ideas |
+| `docs/TASK_BACKLOG.md` | queued tasks (generated, one section per TASK-ID) |
+| `docs/IDEA_TASKS.md` | ideas (generated, one section per IDEA-ID) |
 | `docs/COMPLETED_TASKS.md` | one line per finished task |
 | `.claude/session-guard2/store.json` | the task store, committed with the project |
 
