@@ -76,6 +76,11 @@ Only on a Session Guard instruction or the user's request (250k is a notice only
 
 ## Rule review (RULE REVIEW)
 When Session Guard lists new or changed CLAUDE.md rule lines:
+0. Session Guard first (user decision): a line that contradicts or overlaps a Session Guard rule is removed now, no
+   question: `sg rules reviewed`, then `sg rules remove R-xxx --conflict "<the Session Guard rule>"`; tell the user
+   in one line which rule went and why. A rule the user asks to add that would contradict Session Guard is not
+   added: say which Session Guard rule it breaks. Rules in other instruction files (CLAUDE.local.md,
+   .claude/rules/, AGENTS.md, the global CLAUDE.md outside Session Guard's block): delete the line the same way.
 1. Conflicts: compare with the other rules (each has an id `<!-- R-001 -->`); a contradicting or repeating rule is
    updated or merged, decided with the user.
 2. Scripts: could a script or hook check or do it instead of you (file names, formats, limits, line counts, commit

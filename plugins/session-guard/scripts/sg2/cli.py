@@ -308,15 +308,22 @@ def cmd_rules(a):
     if a.action == "remove":
         if not (a.id and rules.RULE_ID.search("<!-- %s -->" % a.id)):
             raise store.Refused("give a rule id (R-001)")
-        if not (a.approval or "").strip():
-            raise store.Refused("removing a rule needs the user's yes: --approval \"<the user's words>\"")
+        if not (a.approval or "").strip() and not (a.conflict or "").strip():
+            raise store.Refused("removing a rule needs the user's yes (--approval \"<the user's words>\"), or, for a rule "
+                                "that contradicts Session Guard, --conflict \"<the Session Guard rule>\"")
+        why = ("user: " + a.approval.strip()) if (a.approval or "").strip() else \
+            "contradicts Session Guard: " + a.conflict.strip()  # Session Guard's rule stays (user decision 2026-11-05)
+        text = next((t for _, rid, t in rules.parse_rules(root) if rid == a.id), None)
 
         def drop(d):
             r = (d.get("rules") or {}).get(a.id)
             if r:
-                r.update(state="removed", removed_by="user: " + a.approval.strip())
+                r.update(state="removed", removed_by=why)
             return rules.remove_rule(root, a.id)
-        out("%s %s" % (a.id, "removed from CLAUDE.md" if store.mutate(root, drop, render=False) else "not found"))
+        done = store.mutate(root, drop, render=False)
+        if done:
+            render.append_archive(root, "Rule %s removed from CLAUDE.md" % a.id, [text or "-", why])
+        out("%s %s" % (a.id, "removed from CLAUDE.md (%s)" % why if done else "not found"))
         return 0
     n = store.mutate(root, lambda d: rules.mark_reviewed(root, d, sid), render=False)
     out("reviewed: %d rule lines (ids written into CLAUDE.md)" % n)
@@ -591,6 +598,7 @@ def parser():
     u.add_argument("action", choices=["check", "reviewed", "remove"])
     u.add_argument("id", nargs="?")
     u.add_argument("--approval")
+    u.add_argument("--conflict")
 
     h = sub.add_parser("handoff", parents=[common])
     h.add_argument("action", choices=["children", "write", "publish", "adopt"])
@@ -639,7 +647,7 @@ def cmd_breaks(a):
     this computer."""
     if a.action != "show":
         measure.set_probe(a.action == "on")
-        out("break measurement %s for every session on this computer (%s)" % (a.action.upper(), measure.options_path()))
+        out("break measurement %s for every session on this computer (%s)" % (a.action.upper(), core.config_path()))
         return 0
     rows = measure.probe_rows()
     pct = lambda snap, n: "%s%%" % snap[n]["percent"] if (snap or {}).get(n) else "n/a"

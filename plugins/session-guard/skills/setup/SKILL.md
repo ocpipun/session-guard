@@ -13,7 +13,9 @@ explicit yes in this conversation; every push needs its own yes.
 1. `sg manifest verify` must say OK (a changed or unsigned file stops the install). `sg install conflicts`: the
    table of what belongs to 1.x and what 2.0 replaces.
 2. Show the user one numbered list: the table, the 2.0 global block in `~/.claude/CLAUDE.md` (the 1.x block is
-   removed only after the 2.0 block is written), and what migration will do (below). One approval question.
+   removed only after the 2.0 block is written), every rule of `~/.claude/CLAUDE.md` outside Session Guard's
+   blocks that contradicts or overlaps a Session Guard rule (it is removed: Session Guard's rule stays, user
+   decision), and what migration will do (below). One approval question.
 3. Yes: `sg install approve --executive "<this folder>"`, "Notices", then "Migration". The plugin itself is
    updated last (`claude plugin update session-guard@session-guard`; the program in `$CLAUDE_CODE_EXECPATH` when
    `claude` is not on the PATH); then the user fully restarts Claude. 1.x and 2.0 never guard at once: while a 1.x
@@ -34,7 +36,8 @@ explicit yes in this conversation; every push needs its own yes.
    "retire" (deleted whole, no copy); task text inside files used for other things too goes into "remove_text"
    (exact text cut out); CLAUDE.md lines that are state or tasks, not rules, into "claude_md_remove" (a rule lives
    only in CLAUDE.md, a task only in Session Guard's files); script candidates into "rule_scripts" (ideas linked
-   to their rule). The old lists must be gone after the migration, so no agent follows them instead of Session
+   to their rule); every rule of any instruction file that contradicts or overlaps a Session Guard rule into
+   "sg_conflicts" (removed; Session Guard's rule stays). The old lists must be gone after the migration, so no agent follows them instead of Session
    Guard. Contradictions and unknowns listed, never settled by guessing. Show the user the plan, every file to
    delete and every text to cut, by name; on their yes `sg migrate apply "<folder>" --plan <file>` (git: rollback
    tag; a project without git has NO git rollback, only copies of edited files: say so), then `sg migrate verify

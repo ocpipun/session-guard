@@ -283,6 +283,8 @@ PLAN_HELP = """Plan file (JSON), written by Claude after reading the survey and 
  "remove_text": [{"file": "README.md", "text": "the exact task text to cut out of a file used for other things too"}],
  "not_carried": ["items left out because of the limits (listed in the archive)"],
  "claude_md_remove": ["exact CLAUDE.md lines that are state or tasks, not rules (or repeat a task / STATUS line)"],
+ "sg_conflicts": [{"file": "CLAUDE.md or another instruction file", "line": "the exact rule line",
+                   "conflicts_with": "the Session Guard rule it contradicts or overlaps"}],
  "rule_scripts": [{"rule": "the exact CLAUDE.md rule line", "script": "what a script or hook would check"}],
  "contradictions": ["..."], "uncertain": ["..."], "sources": ["files and commits the plan rests on"]}
 At most 10 active tasks, 50 queued tasks and 50 ideas (rule_scripts not counted); the rest in "not_carried", shown
@@ -290,7 +292,9 @@ to the user. Every open item of the survey's task_list_files becomes a task, a s
 every finished item a "completed" line (id PRE20-DONE-xxx; ideas get PRE20-IDEA-xxx, tasks are marked pre-2.0).
 Then a file that only listed tasks goes into "retire" (deleted whole), task text inside other files into
 "remove_text" (cut out), so no agent reads the old lists after the migration. A rule stays only in CLAUDE.md, a task or state line only in Session Guard's files: settle each
-pair of the survey's "duplicates" in the plan."""
+pair of the survey's "duplicates" in the plan. Every rule of the instruction files (CLAUDE.md, CLAUDE.local.md,
+.claude/CLAUDE.md, .claude/rules/, AGENTS.md ...) that contradicts or overlaps a Session Guard rule goes into
+"sg_conflicts": it is removed, Session Guard's rule stays (user decision 2026-11-05)."""
 
 
 def _validate_plan(plan):
@@ -311,6 +315,12 @@ def _validate_plan(plan):
                 or r.startswith(".claude/session-guard2"):
             raise store.Refused("cannot retire or edit %s (outside the project, CLAUDE.md (use claude_md_remove), or a "
                                 "Session Guard file)" % rel)
+    for x in plan.get("sg_conflicts") or []:
+        r = str((x or {}).get("file") or "").replace("\\", "/").lstrip("/") if isinstance(x, dict) else ""
+        if not r or ".." in r.split("/") or r.lower() == "docs/status.md" or r in SG_DOCS or \
+                r.startswith(".claude/session-guard2") or not str(x.get("line") or "").strip():
+            raise store.Refused("sg_conflicts entries are {\"file\": <instruction file in the project>, \"line\": \"the "
+                                "exact rule line\", \"conflicts_with\": \"the Session Guard rule\"}")
     for x in plan.get("remove_text") or []:
         if not (isinstance(x, dict) and str(x.get("text") or "").strip()):
             raise store.Refused("remove_text entries are {\"file\": ..., \"text\": \"the exact text to cut\"}")
@@ -350,6 +360,22 @@ def _retire(root, plan, bdir, report):
         keep_copy(p)
         core.write_text(p, render.tidy(text.replace("\r\n", "\n").replace(cut, "", 1)))
         edited.append(os.path.relpath(p, root).replace("\\", "/"))
+    gone = []
+    for x in plan.get("sg_conflicts") or []:  # Session Guard's rule stays, the contradicting one goes
+        p = core.exists_ci(root, str(x["file"]).replace("\\", "/"))
+        text = core.read_text(p) if p and os.path.isfile(p) else None
+        want = str(x["line"]).strip()
+        rows = (text or "").splitlines(keepends=True)
+        hit = next((i for i, l in enumerate(rows) if l.strip() == want), None)
+        if hit is None:
+            report["warnings"].append("sg_conflicts: line not found in %s, nothing removed: %s" % (x["file"], want))
+            continue
+        keep_copy(p)
+        del rows[hit]
+        core.write_text(p, render.tidy("".join(rows)))
+        gone.append("%s: %s (contradicts Session Guard: %s)" % (os.path.relpath(p, root).replace("\\", "/"), want,
+                                                               x.get("conflicts_with") or "-"))
+    report["sg_conflicts_removed"] = gone
     lines = [str(l).strip() for l in plan.get("claude_md_remove") or [] if str(l).strip()]
     cm = core.exists_ci(root, "CLAUDE.md")
     if lines and cm:
@@ -469,6 +495,7 @@ def apply(root, plan, migrator_session):
     notes += ["Not carried over (limit %d queued tasks / %d ideas): %s" % (store.MAX_QUEUE, store.MAX_IDEAS, c)
               for c in plan.get("not_carried") or []]
     notes += ["Removed from CLAUDE.md (state, not a rule): " + r for r in report.get("claude_md_removed") or []]
+    notes += ["Rule removed, Session Guard's rule stays: " + r for r in report.get("sg_conflicts_removed") or []]
     render.append_archive(root, "Migration to Session Guard 2.0 (%s)" % store.load(root)["project_id"], notes)
     pid = store.load(root)["project_id"]
 

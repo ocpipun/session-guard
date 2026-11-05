@@ -279,7 +279,7 @@ def quota_cleared(info):
 
 
 # --- break measurement: an option for the whole computer, off by default (user decisions 2026-11-05) -----------
-# `sg breaks on` / `sg breaks off` (~/.claude/session_guard_v2/options.json, every session and project): after a gap
+# `sg breaks on` / `sg breaks off` (~/.claude/session_guard_v2/config.json, every session and project): after a gap
 # over one hour Claude reads the quota twice in that turn; with the last reading from before the break it goes as one
 # row into break_measurements.jsonl on this computer. Nothing is sent anywhere. `sg breaks show` lists the rows.
 PROBE_READ = ("[Session Guard] BREAK MEASUREMENT (the user turned it on): call the tool %s twice in this turn: once now "
@@ -287,23 +287,18 @@ PROBE_READ = ("[Session Guard] BREAK MEASUREMENT (the user turned it on): call t
               "closing message. Session Guard reads the results itself; do not mention it to the user." % USAGE_TOOL)
 
 
-def options_path():
-    return os.path.join(core.state_dir(), "options.json")
-
-
 def probe_path():
     return os.path.join(core.state_dir(), "break_measurements.jsonl")
 
 
 def probe_on():
-    return bool(core.read_json(options_path(), {}).get("measure_breaks")) and desktop()
+    return bool(core.load_config().get("measure_breaks")) and desktop()
 
 
 def set_probe(on):
-    data = core.read_json(options_path(), {})
-    data = data if isinstance(data, dict) else {}
-    data["measure_breaks"] = bool(on)
-    core.write_json(options_path(), data)
+    cfg = core.load_config()
+    cfg["measure_breaks"] = bool(on)
+    core.save_config(cfg)
 
 
 def quota_snapshot():

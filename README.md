@@ -106,7 +106,8 @@ A 24-hour watch tells the user when a turn or a background job has been running 
 - **New id when needed:** continuing a task keeps its id; redoing a wrongly finished task or extending a finished
   one is a new task linked to the old one. A finished subtask never finishes its parent.
 - **Safe parallel writes:** one lock per project store, a fresh read inside the lock, revision checks; direct edits
-  of the store are refused, and a hand-edited task block in STATUS.md is rebuilt from the store.
+  of the store are refused, and a hand-edited task block in STATUS.md is rebuilt from the store. A session acts
+  only as itself: an `sg` command with another session's id is refused.
 - **Session start:** Claude gets its ids, its tasks and the tasks it could take over; when several can be taken,
   Claude asks the user which one.
 
@@ -159,7 +160,7 @@ small hook that blocks cloud sessions of it. A cloud project carries a copy of S
   `SESSION-GUARD: 2.0` signature of every file) is checked, and a table shows what belongs to 1.x and what 2.0
   replaces. One approval.
 - **Migration**, one project at a time, every step approved: discover the projects (also ones found later),
-  survey each (git state, instruction and status files, old sessions), a reading by a subagent, a plan (at most 3
+  survey each (git state, instruction and status files, old sessions), a reading by a subagent, a plan (at most 10
   active tasks), a rollback point (git tag; file copies for every project), apply, verify, and a verified push of
   Session Guard's own files only. Conversations that began before a project's migration are locked.
 - **Budget:** an installation session may use about 800k tokens; at 90% it stops at a safe point and the user
@@ -192,10 +193,18 @@ then its rule leaves CLAUDE.md. So checks move from Claude (tokens every session
 STATUS.md and CLAUDE.md are edited by section and id, never by line number; empty lines and empty bullets left by
 an edit are removed.
 
+**Session Guard's rules come first.** Claude Code loads every instruction file side by side and does not rank
+them, so two contradicting rules would leave Claude to choose. Session Guard therefore never leaves a contradiction
+in place: a rule in any instruction file (project or global) that contradicts or overlaps a Session Guard rule is
+removed (at migration, at install for the global file, and at every rule review), and a new rule that would
+contradict Session Guard is not added. Each removal is shown to the user and recorded in the archive. What hooks
+enforce (thresholds, locks, limits, ownership) holds whatever any file says.
+
 ## 13. Commands
 User: `start long mode`, `finish session`, `continue installation` (at the start followed by a comma or period, or
 at the end of a message). Claude uses `sg task …`, `sg idea …`, `sg rules check|reviewed`,
-`sg handoff write|publish|adopt`, `sg migrate …`, `sg install …`, `sg manifest verify` and `sg report` itself.
+`sg handoff children|write|publish|adopt`, `sg breaks`, `sg migrate …`, `sg install …`, `sg manifest verify` and
+`sg report` itself. The full list is at the end of this file (§16).
 
 ## 14. Limits
 - The transcript format Session Guard reads is not documented by Anthropic and may change.
@@ -213,3 +222,59 @@ python -m unittest discover -s tests
 
 ## License
 MIT ([LICENSE](LICENSE)). Provided as is, without warranty.
+
+## 16. All commands
+User commands, typed in a message (at its start followed by a comma or period, or at its end):
+- `start long mode` — long mode for this session (cannot be switched off)
+- `finish session` — hand-offs, session measurement, then the session is locked
+- `continue installation` — continues a paused installation (only in `session-guard-executive`)
+
+`sg` commands. `sg` stands for `python "<plugin>/scripts/session_guard.py"`; Claude gets the exact command at
+session start and runs these itself. You can ask Claude to run any of them.
+
+Tasks and ideas
+- `sg task list [--all]` — the project's tasks
+- `sg task show <TASK-ID>` — one task with its hand-off
+- `sg task check --title "..." [--title "..."]` — new work compared with all existing work
+- `sg task new --title "..." --approval "..." [--priority P1|P2|P3] [--kind urgent --reason "..."] [--queue]` — a main task
+- `sg task new --title "..." --parent <TASK-ID>` — a subtask
+- `sg task start <TASK-ID>` — a queued task becomes active
+- `sg task claim <TASK-ID> [--takeover "<the user's words>"]` — take over a task
+- `sg task note <TASK-ID> [--done ...] [--pending ...] [--resolved ...] [--status ...] [--text ...]` — update a task
+- `sg task done <TASK-ID> [--summary ...] [--verified ...] [--force]` / `sg task cancel <TASK-ID>` — close a task
+- `sg task reopen <TASK-ID> --title "..." [--relation reopens|extends]` — redo or extend as a new linked task
+- `sg task relate <TASK-ID> --other <TASK-ID> [--relation ...]` — link two tasks
+- `sg idea add "<text>" [--source ...] [--rule R-xxx] [--force ...]` — record an idea
+- `sg idea promote <IDEA-ID> --approval "..." [--queue]` — an idea becomes a task
+
+Hand-offs
+- `sg handoff children` — before a hand-off: the child session agents and the message for the bound ones
+- `sg handoff write <TASK-ID> --technical "..." [--paths ...] [--no-files] [--side-branch] [--pr <link>] [--children-gone "..."]` — write a task's hand-off
+- `sg handoff publish` — publish the hand-offs (side branches pushed and verified)
+- `sg handoff adopt sg/<task-id>` — merge a side branch with its work and hand-off
+
+Rules
+- `sg rules check` — CLAUDE.md rule lines not reviewed yet
+- `sg rules reviewed` — record the review (gives rule ids)
+- `sg rules remove <R-ID> --approval "..."` — remove a rule line (with the user's yes)
+- `sg rules remove <R-ID> --conflict "<Session Guard rule>"` — remove a rule that contradicts Session Guard
+
+Break measurement
+- `sg breaks on` / `sg breaks off` / `sg breaks show`
+
+Install, migration, uninstall (from `session-guard-executive`, each with the user's yes)
+- `sg manifest verify` (`sg manifest build` only for developers)
+- `sg install conflicts` · `sg install approve --executive "<folder>"` · `sg install language [<code>]` ·
+  `sg install messages <file>`
+- `sg install cloud "<repository>"` · `sg install home-guard "<folder>"`
+- `sg install remove-project "<folder>" [--remove-store]` · `sg install uninstall [--purge-state]`
+- `sg migrate discover [--add <folder>]` · `sg migrate status` · `sg migrate survey "<folder>"` ·
+  `sg migrate plan-help` · `sg migrate apply "<folder>" --plan <file>` · `sg migrate verify "<folder>"` ·
+  `sg migrate push "<folder>" --approval "..."` · `sg migrate pause --reason ...` ·
+  `sg migrate skip "<folder>" --reason ...` · `sg migrate finish` · `sg migrate start --claude-session <id>`
+
+Session measurement
+- `sg report "<project folder>"` — one line for "finish session"
+
+Common options: `--session <SESSION-ID>` (only the session's own id), `--root <project folder>`,
+`--expect-rev <n>`.

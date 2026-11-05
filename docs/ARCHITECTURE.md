@@ -71,7 +71,7 @@ side branch name.
 |---|---|---|
 | Context measurement, thresholds, long mode | REUSED, CHANGED | numbers kept; hand-off per task; long mode hands off at 800k (1.4: 700k while work went on); after the 300k/800k hand-off "start long mode" and "finish session" are refused (user decision 2026-11-03: no second, stale hand-off of one session) |
 | Break rule | REUSED, CHANGED | the hook itself stores the user's command word for word in each owned task; lock over 175k (was 100k, user decision 2026-11-05: a fresh session starts near 78k); decided by the mode before the message, so "start long mode" cannot skip it (v1.4 bug) |
-| Break measurement | NEW | off by default, for the whole computer (every session and project); `sg breaks on` / `sg breaks off` write ~/.claude/session_guard_v2/options.json; after a gap over 1 hour Claude reads the quota twice in that turn; with the last reading before the break one row goes to break_measurements.jsonl on that computer (nothing is sent); `sg breaks show` shows them; in README. UNVERIFIED: whether the first reading already includes the turn's first request |
+| Break measurement | NEW | off by default, for the whole computer (every session and project); `sg breaks on` / `sg breaks off` write ~/.claude/session_guard_v2/config.json; after a gap over 1 hour Claude reads the quota twice in that turn; with the last reading before the break one row goes to break_measurements.jsonl on that computer (nothing is sent); `sg breaks show` shows them; in README. UNVERIFIED: whether the first reading already includes the turn's first request |
 | Quota (Session Follow) | DIRECTLY REUSED | same thresholds; state moved to `session_guard_v2/follow` |
 | Session lock types | REUSED, EXTENDED | + handed, legacy, home |
 | Reopened conversation by message ids | DIRECTLY REUSED | |
@@ -182,6 +182,10 @@ push or pull request; `sg/*` branches are deleted by the user on GitHub (the clo
   `--parent`, `task start|claim|reopen` and `idea promote` when the input carries `agent_id` (documented: hooks
   run inside subagents with agent_id / agent_type). Sessions started from a session register on their own and are
   not locked with it: each session has its own record and lock (the store's parent/children fields only link).
+- A session acts only as itself (review 2026-11-05): PreToolUse refuses an `sg` Bash command whose --session is
+  another session's id (its own first id, the alias of a child id, counts as its own). Hook-time git queries
+  (ls-remote at session start) run with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never: no credential prompt.
+  CLAUDE.md rule ids are never written into table rows, comments of several lines or indented code.
 - Urgent belongs to its agent (user decision 2026-11-04): only the owner of an active urgent task is refused new,
   queued, started or promoted tasks; other agents go on.
 - Child session agents (user decisions 2026-11-04): a brief line "SG-PARENT: <id> bound|independent" in a new

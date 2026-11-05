@@ -110,7 +110,8 @@ Kilitli oturuma mesaj ulaşmaz; kullanıcıya nedeni söylenir. Türleri:
 - **Gerektiğinde yeni kimlik:** kaldığı yerden devam aynı kimlikle; hatalı biten işi yeniden yapmak ya da biten
   işe özellik eklemek eskisine bağlı yeni görevdir. Alt görev bitince üst görev kendiliğinden bitmez.
 - **Güvenli paralel yazma:** proje başına bir kilit, kilit içinde taze okuma, sürüm denetimi; görev kaydının elle
-  değiştirilmesi reddedilir, STATUS.md'deki görev bölümü elle bozulursa kayıttan yeniden oluşturulur.
+  değiştirilmesi reddedilir, STATUS.md'deki görev bölümü elle bozulursa kayıttan yeniden oluşturulur. Her
+  oturum yalnız kendisi olarak çalışır: başka bir oturumun kimliğiyle verilen `sg` komutu reddedilir.
 - **Oturum başı:** Claude kimliklerini, görevlerini ve devralabileceği görevleri alır; birden fazlası varsa hangisi
   olduğunu kullanıcıya sorar.
 
@@ -163,7 +164,7 @@ bulut oturumlarını engelleyen küçük bir hook bulunur. Bulut projesi Session
   bağımlılıkları ve `SESSION-GUARD: 2.0` imzası) denetlenir; 1.x'e ait olanla 2.0'ın değiştireceğini gösteren bir
   tablo çıkar. Tek onay.
 - **Migration**, her seferinde bir proje, her adım onaylı: projeleri bulma (sonradan bulunanlar da), her birini
-  inceleme (git durumu, talimat ve durum dosyaları, eski oturumlar), bir alt ajanın okuması, plan (en fazla 3
+  inceleme (git durumu, talimat ve durum dosyaları, eski oturumlar), bir alt ajanın okuması, plan (en fazla 10
   aktif görev), geri dönüş noktası (git etiketi; her projede dosya kopyaları), uygulama, doğrulama ve yalnız
   Session Guard dosyalarının doğrulanmış push'u. Proje geçişinden önce başlamış konuşmalar kilitlenir.
 - **Bütçe:** bir kurulum oturumu yaklaşık 800k token kullanabilir; %90'da güvenli bir noktada durur, kullanıcı
@@ -201,8 +202,8 @@ bıraktığı boş satırlar ve boş maddeler silinir.
 ## 13. Komutlar
 Kullanıcı: `start long mode`, `finish session`, `continue installation` (mesajın başında, ardından virgül ya da
 nokta; ya da sonunda). Claude `sg task …`, `sg idea …`, `sg rules check|reviewed`,
-`sg handoff write|publish|adopt`, `sg migrate …`, `sg install …`, `sg manifest verify` ve `sg report` komutlarını
-kendisi kullanır.
+`sg handoff children|write|publish|adopt`, `sg breaks`, `sg migrate …`, `sg install …`, `sg manifest verify` ve
+`sg report` komutlarını kendisi kullanır. Tam liste bu dosyanın sonundadır (§16).
 
 ## 14. Sınırlar
 - Session Guard'ın okuduğu oturum kaydı biçimi Anthropic tarafından belgelenmemiştir, değişebilir.
@@ -220,3 +221,59 @@ python -m unittest discover -s tests
 
 ## Lisans
 MIT ([LICENSE](LICENSE)). Olduğu gibi, garantisiz sunulur.
+
+## 16. Bütün komutlar
+Kullanıcı komutları, mesaja yazılır (mesajın başında, ardından virgül ya da nokta; ya da sonunda):
+- `start long mode` — bu oturum için uzun mod (kapatılamaz)
+- `finish session` — devirler, oturum ölçümü, sonra oturum kilitlenir
+- `continue installation` — duraklamış kurulumu sürdürür (yalnız `session-guard-executive`'de)
+
+`sg` komutları. `sg`, `python "<plugin>/scripts/session_guard.py"` demektir; Claude tam komutu oturum başında alır
+ve bunları kendisi çalıştırır. Herhangi birini Claude'dan isteyebilirsiniz.
+
+Görevler ve fikirler
+- `sg task list [--all]` — projenin görevleri
+- `sg task show <TASK-ID>` — tek görev, devriyle birlikte
+- `sg task check --title "..." [--title "..."]` — yeni işi mevcut bütün işlerle karşılaştırır
+- `sg task new --title "..." --approval "..." [--priority P1|P2|P3] [--kind urgent --reason "..."] [--queue]` — ana görev
+- `sg task new --title "..." --parent <TASK-ID>` — alt görev
+- `sg task start <TASK-ID>` — sıradaki görev aktif olur
+- `sg task claim <TASK-ID> [--takeover "<kullanıcının sözleri>"]` — görevi devralır
+- `sg task note <TASK-ID> [--done ...] [--pending ...] [--resolved ...] [--status ...] [--text ...]` — görevi günceller
+- `sg task done <TASK-ID> [--summary ...] [--verified ...] [--force]` / `sg task cancel <TASK-ID>` — görevi kapatır
+- `sg task reopen <TASK-ID> --title "..." [--relation reopens|extends]` — bağlı yeni görevle yeniden yapar ya da genişletir
+- `sg task relate <TASK-ID> --other <TASK-ID> [--relation ...]` — iki görevi bağlar
+- `sg idea add "<metin>" [--source ...] [--rule R-xxx] [--force ...]` — fikir kaydeder
+- `sg idea promote <IDEA-ID> --approval "..." [--queue]` — fikir görev olur
+
+Devirler
+- `sg handoff children` — devirden önce: alt oturum ajanları ve bağlı olanlara gönderilecek mesaj
+- `sg handoff write <TASK-ID> --technical "..." [--paths ...] [--no-files] [--side-branch] [--pr <bağlantı>] [--children-gone "..."]` — görevin devir notu
+- `sg handoff publish` — devirleri yayımlar (yan dallar push edilir ve doğrulanır)
+- `sg handoff adopt sg/<task-id>` — işi ve devriyle bir yan dalı birleştirir
+
+Kurallar
+- `sg rules check` — CLAUDE.md'de henüz incelenmemiş kural satırları
+- `sg rules reviewed` — incelemeyi kaydeder (kural kimliklerini verir)
+- `sg rules remove <R-ID> --approval "..."` — kural satırını kaldırır (kullanıcının onayıyla)
+- `sg rules remove <R-ID> --conflict "<Session Guard kuralı>"` — Session Guard'la çelişen kuralı kaldırır
+
+Mola ölçümü
+- `sg breaks on` / `sg breaks off` / `sg breaks show`
+
+Kurulum, migration, kaldırma (`session-guard-executive`'den, her biri kullanıcının onayıyla)
+- `sg manifest verify` (`sg manifest build` yalnız geliştirici için)
+- `sg install conflicts` · `sg install approve --executive "<klasör>"` · `sg install language [<kod>]` ·
+  `sg install messages <dosya>`
+- `sg install cloud "<depo>"` · `sg install home-guard "<klasör>"`
+- `sg install remove-project "<klasör>" [--remove-store]` · `sg install uninstall [--purge-state]`
+- `sg migrate discover [--add <klasör>]` · `sg migrate status` · `sg migrate survey "<klasör>"` ·
+  `sg migrate plan-help` · `sg migrate apply "<klasör>" --plan <dosya>` · `sg migrate verify "<klasör>"` ·
+  `sg migrate push "<klasör>" --approval "..."` · `sg migrate pause --reason ...` ·
+  `sg migrate skip "<klasör>" --reason ...` · `sg migrate finish` · `sg migrate start --claude-session <kimlik>`
+
+Oturum ölçümü
+- `sg report "<proje klasörü>"` — "finish session" için tek satır
+
+Ortak seçenekler: `--session <SESSION-ID>` (yalnız oturumun kendi kimliği), `--root <proje klasörü>`,
+`--expect-rev <n>`.

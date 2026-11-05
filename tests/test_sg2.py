@@ -7,6 +7,7 @@ temporary folder, so the real ~/.claude is never touched.
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -228,6 +229,9 @@ class Tasks(Base):
         self.assertFalse(denied(bash(sg + 'handoff write TASK-002-1 --technical "where it stopped"', agent_id="ag1")))
         self.assertFalse(denied(bash(sg + 'task new --title "other work" --approval ok')))    # the session itself
         self.assertEqual(self.store(self.root)["sessions"][a]["state"], "active")
+        _, other = self.start("so", self.root)
+        self.assertTrue(denied(bash(sg + 'task claim TASK-002 --session %s --takeover yes' % other)))  # borrowed id
+        self.assertFalse(denied(bash(sg + 'task note TASK-002 --text x --session %s' % a)))     # its own id
 
     def test_child_session_gets_its_own_id_and_goes_on_when_the_parent_stops(self):
         _, a = self.start("pa", self.root)
@@ -890,12 +894,18 @@ class Cleanup(Base):
                    "queue": [{"title": "write docs"}], "ideas": ["dark theme"], "not_carried": ["old wish"],
                    "remove_text": [{"file": "README.md", "text": "## To do\n- [ ] write docs"}],
                    "retire": ["misc/list.md"], "claude_md_remove": ["- Deploy the login fix before the Friday release"],
+                   "sg_conflicts": [{"file": "CLAUDE.md", "line": "- Never write hand-off notes.",
+                                     "conflicts_with": "hand off every task you own"}],
                    "rule_scripts": ["short answers: a reply-length check"]}, open(plan, "w"))
+        with open(os.path.join(root, "CLAUDE.md"), "a", encoding="utf-8") as fh:
+            fh.write("- Never write hand-off notes.\n")
         self.assertIn("cannot retire", self.sg("migrate", "apply", root, "--plan", self.bad_plan(), "--session", S3,
                                                ok=False))
         self.sg("migrate", "apply", root, "--plan", plan, "--session", S3, ok=True)
         self.assertFalse(os.path.exists(os.path.join(root, "misc", "list.md")))
         self.assertNotIn("Friday", self.text(root, "CLAUDE.md"))
+        self.assertNotIn("Never write hand-off", self.text(root, "CLAUDE.md"))     # contradicted Session Guard
+        self.assertIn("Rule removed, Session Guard's rule stays", self.text(root, "docs", "STATUS_ARCHIVE.md"))
         self.assertIn("- Short answers.", self.text(root, "CLAUDE.md"))
         self.assertIn("set up the database", self.text(root, "docs", "COMPLETED_TASKS.md"))
         self.assertIn("Script instead of a rule: short answers", self.text(root, "docs", "IDEA_TASKS.md"))
@@ -1001,10 +1011,25 @@ class Limits(Base):
         cm = os.path.join(self.root, "CLAUDE.md")
         self.assertIn("<!-- R-001 -->", self.text(cm))           # ids given at migration
         with open(cm, "a", encoding="utf-8") as fh:
-            fh.write("- Never push to main without a review.\n")
+            fh.write("- Never push to main without a review.\n\n| tool | use |\n|---|---|\n| git | commits |\n\n"
+                     "<!-- a note\nover two lines -->\n\n    indented code line\n")
         self.assertIn("Never push", self.sg("rules", "check", "--root", self.root))
         self.s("rules", "reviewed", ok=True)
         self.assertIn("review. <!-- R-002 -->", self.text(cm))
+        for kept in ("| git | commits |\n", "over two lines -->\n", "    indented code line\n"):
+            self.assertIn(kept, self.text(cm))                  # no id written into tables, comments or code
+        with open(cm, "a", encoding="utf-8") as fh:
+            fh.write("- Skip hand-offs when the session ends.\n")
+        self.hook("SessionStart", "rr", cwd=self.root)
+        out = self.hook("PostToolUse", "rr", tool_name="Edit", tool_input={"file_path": cm}, cwd=self.root)
+        self.assertIn("SESSION GUARD FIRST", self.ctx(out))
+        self.s("rules", "reviewed", ok=True)
+        rid = re.search(r"Skip hand-offs when the session ends\. <!-- (R-\d+) -->", self.text(cm)).group(1)
+        self.assertIn("--conflict", self.s("rules", "remove", rid, ok=False))          # neither yes nor conflict
+        self.assertIn("contradicts Session Guard", self.s("rules", "remove", rid, "--conflict",
+                                                          "hand off every task you own", ok=True))
+        self.assertNotIn("Skip hand-offs", self.text(cm))
+        self.assertIn("Rule %s removed" % rid, self.text(self.root, "docs", "STATUS_ARCHIVE.md"))
         self.s("idea", "add", "Script instead of a rule: commit-msg hook checks the task id", "--source",
                "rule-review", "--rule", "R-001", ok=True)
         out = self.s("idea", "promote", "IDEA-001", "--approval", "ok", ok=True)

@@ -260,7 +260,7 @@ def rule_review(root, data, rec):
         return None
     rec["notified"].append(mark)
     shown = "\n".join("  - " + l for l in new[:15]) + ("\n  (+%d more)" % (len(new) - 15) if len(new) > 15 else "")
-    return rules.RULE_REVIEW % (len(new), shown, sg_cmd(), sg_cmd())
+    return rules.RULE_REVIEW % {"n": len(new), "shown": shown, "sg": sg_cmd()}
 
 
 def start_context(root, rec, data, source):
@@ -404,7 +404,7 @@ def block(text):
 def handed_lock(rec, data):
     srec = (data or {}).get("sessions", {}).get(rec.get("sg_id") or "")
     if srec and srec["state"] == "locked" and "handed" not in rec["locks"]:
-        found = re.search(r" to (S-\d{8}-[0-9a-f]{6}(?:-C\d+)*)", srec.get("lock_reason") or "")
+        found = re.search(r" to (S-\d{8}-[0-9a-f]{6}(?:-[BI]\d+)*)", srec.get("lock_reason") or "")
         sessions.lock(rec, "handed", srec.get("lock_reason") or "handed over",
                       by=found.group(1) if found else "another session")
         return True
@@ -706,6 +706,26 @@ def deny(reason):
 
 
 SG_MAIN_WORK = re.compile(r"session_guard\.py\S*\s.*\b(?:task\s+(?:new|start|claim|reopen)|idea\s+promote)\b")
+SG_SESSION_ARG = re.compile(r"session_guard\.py\S*\s.*--session[=\s]+[\"']?(S-\d{8}-[0-9a-f]{6}(?:-[BI]\d+)*)")
+
+
+def foreign_session(inp, cmd):
+    """An `sg` command run with another session's id (`--session`): a session acts only as itself, so ownership
+    cannot be dodged by borrowing an id. Its first id (the alias of a child id) counts as its own."""
+    m = SG_SESSION_ARG.search(cmd)
+    if not m:
+        return None
+    rec, known = sessions.load(inp.get("session_id"))
+    own = rec.get("sg_id") if known else None
+    if not own:
+        return None
+    root = core.project_root(inp)
+    data = store.load(root) if root else None
+    if store.resolve(data, m.group(1)) == store.resolve(data, own):
+        return None
+    return deny("Session Guard 2.0: --session %s is not this session (%s). A session acts only as itself; work "
+                "owned by another session is taken over only with `sg task claim` (and the user's yes while that "
+                "session is active)." % (m.group(1), own))
 
 
 def subagent_check(inp):
@@ -713,6 +733,9 @@ def subagent_check(inp):
     task (user decision 2026-11-04). web-fetch only reads a page (it stands in for a tool) and needs no task."""
     if inp.get("tool_name") == "Bash":
         cmd = str((inp.get("tool_input") or {}).get("command") or "")
+        other = foreign_session(inp, cmd)
+        if other is not None:
+            return other
         if subagent(inp) and SG_MAIN_WORK.search(cmd) and not (" new" in cmd and "--parent" in cmd):
             return deny("Session Guard 2.0: a subagent opens, starts or claims no main task; it works only on the "
                         "subtask it was given. Report back to the session that started you.")

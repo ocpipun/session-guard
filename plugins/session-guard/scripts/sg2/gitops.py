@@ -1,8 +1,10 @@
 # SESSION-GUARD: 2.0 | component: sg2-gitops | version: 2.0.0
 """Git steps: rollback point, committing only Session Guard's own paths, push and push verification.
 
-A push counts only when `git ls-remote` shows the remote branch at the local commit. Other changes of the user
-are never staged or committed: commits name their paths (`git commit -- <paths>`).
+A push counts only when `git ls-remote` shows the remote branch at the local commit. Commits name their paths
+(`git commit -- <paths>`): other files of the user are never staged. CLAUDE.md and .claude/settings.json are among
+Session Guard's paths (it writes rule ids and hooks there), so the user's own edits in those two files go into
+Session Guard's commits too.
 """
 import os
 import re
@@ -12,10 +14,13 @@ SG_PATHS = (".claude/session-guard2", "docs/STATUS.md", "docs/STATUS_ARCHIVE.md"
             "docs/IDEA_TASKS.md", "docs/COMPLETED_TASKS.md", "CLAUDE.md", ".claude/settings.json")
 
 
-def git(root, *args, timeout=120, strip=True):
+QUIET = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}  # no credential prompt or window in a hook
+
+
+def git(root, *args, timeout=120, strip=True, quiet=False):
     try:
         r = subprocess.run(["git", "-C", root] + list(args), capture_output=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, env=dict(os.environ, **QUIET) if quiet else None)
     except (OSError, subprocess.SubprocessError) as e:
         return 1, "", str(e)
     out = r.stdout.decode("utf-8", "replace")
@@ -180,7 +185,7 @@ def remote_side_branches(root):
     rem = remote(root)
     if not rem:
         return []
-    rc, out, _ = git(root, "ls-remote", "--heads", rem, SIDE_PREFIX + "*", timeout=6)
+    rc, out, _ = git(root, "ls-remote", "--heads", rem, SIDE_PREFIX + "*", timeout=6, quiet=True)
     found = []
     for line in out.splitlines() if rc == 0 else []:
         sha, _, ref = line.partition("\t")
@@ -196,7 +201,7 @@ def merged_side_branches(root):
     rem = remote(root)
     if not rem:
         return []
-    rc, out, _ = git(root, "ls-remote", rem, "HEAD", "refs/heads/" + SIDE_PREFIX + "*", timeout=6)
+    rc, out, _ = git(root, "ls-remote", rem, "HEAD", "refs/heads/" + SIDE_PREFIX + "*", timeout=6, quiet=True)
     if rc:
         return []
     refs = [l.split("\t") for l in out.splitlines() if "\t" in l]
