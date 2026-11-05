@@ -19,7 +19,7 @@
    "path": "hooks/hooks.json",
    "type": "json",
    "session_guard": "2.0.0",
-   "sha256": "f54e317e550b800b31a2bb02a0f6f74fc0c15454b44d76fcd47b5c9ac3813023",
+   "sha256": "70b050eecc0c4a72b9ec3db46b0cfdf860c06725b8c48304619d304f192054e1",
    "signed": true,
    "depends": [
     "sg-entry"
@@ -67,7 +67,7 @@
    "path": "scripts/sg2/cli.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "150be3d79fa0298195fdedefd8fc4ce4731afa530cae069ee8dcae8200bf4e43",
+   "sha256": "d6756c8e28d16f8e9cb60a537332ed4348defbdd62d1ea7524da25122fef95ea",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -111,7 +111,7 @@
    "path": "scripts/sg2/hooks.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "9e170e511a33cd3cf16ee546542973b18e58172145b21ab6a5fc72f9d0250b0c",
+   "sha256": "4ff2647a708985cd3c108184d026bf5f5b18f52a9ae1ab0b4bfddac3c9baa067",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -159,7 +159,7 @@
    "path": "scripts/sg2/measure.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "6f9f1bbed7ac25ca5750c85a35b52fe76e58d21cb5d4035a31aa1644855e24ed",
+   "sha256": "e056dfccc3626e04159a423765f9d158bc4ff0725a3a13d891ce99f4708ea255",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -172,7 +172,7 @@
    "path": "scripts/sg2/messages.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "478d4befb0dba137024fe882bfb6ed44b2c821fd53da5c954e03a878e63fe477",
+   "sha256": "a9db752eeeed6e6f9fdc9200a318e4019cb6e02c2dbcee9bb6d05e66a5b0ea1b",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -205,7 +205,7 @@
    "path": "scripts/sg2/place.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "90ff2f8c5dad12ad2695718daedc7996312135fa2505ec110727562a008b2641",
+   "sha256": "e6a7d43cafb791c707af18b16372c6a63a71de525de72ad6ae63e1d6ec4e6172",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -253,7 +253,7 @@
    "path": "scripts/sg2/sessions.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "94b5cbe36a35d954f30ec0ed3728725fd4215a608f19c2ef08d6024ee8022202",
+   "sha256": "453f9760a09ae5e24c958261ba21899811f18cf4c5b6e4c05a7cc96e2e39fa10",
    "signed": true,
    "depends": [
     "sg2-core",

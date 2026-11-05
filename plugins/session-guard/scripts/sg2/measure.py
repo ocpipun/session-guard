@@ -215,8 +215,8 @@ def break_decision(reading, long_mode, finishing):
 
 # --- Session Follow (quota), from v1.4 -------------------------------------------------
 WINDOWS = (("five_hour", "5-hour"), ("weekly", "weekly"))
-ASK_AT = {"five_hour": 85, "weekly": 95}
-STOP_AT = {"five_hour": 90, "weekly": 98}
+ASK_AT = {"five_hour": 90, "weekly": 97}
+STOP_AT = {"five_hour": 95, "weekly": 99}  # user decision 2026-11-05 (was 90 / 98)
 READING_MAX_AGE = 20 * 60
 ASK_STEP = 5 * 60
 RESET_MARGIN = 45 * 60

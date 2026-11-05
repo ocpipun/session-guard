@@ -675,11 +675,26 @@ class Guard(Base):
         self.hook("PostToolUse", "ia", self.transcript("ia", 220000, minutes_ago=130), cwd=root, tool_name="Bash")
         out, b = self.start("ib", root, self.transcript("ib", 1000))
         text = self.ctx(out)
-        self.assertIn("IDLE SESSIONS WITH OPEN TASKS: %s owns TASK-002; idle 2 h 10 min, context 220k, break rule "
-                      "applies" % a, text)
-        self.assertIn("so it is not taken here", text)
-        idle_row = [l for l in text.splitlines() if l.startswith("IDLE SESSIONS")][0]
-        self.assertNotIn("--takeover", idle_row)                  # no takeover offered for work not handed off
+        self.assertIn("AUTOMATIC HAND-OFF NEEDED: %s (tasks TASK-002; break rule (2 h 10 min without a message, "
+                      "context 220k)" % a, text)                          # closed without a hand-off: woken
+        self.assertIn("SG-AUTO-HANDOFF <its SESSION-ID>", text)
+        out, _ = self.start("ic", root, self.transcript("ic", 1000))
+        self.assertNotIn("AUTOMATIC HAND-OFF NEEDED", self.ctx(out))     # asked once, not again at once
+        idle = self.transcript("ia", 220000, minutes_ago=130)
+        out = self.hook("UserPromptSubmit", "ia", idle, cwd=root, prompt="SG-AUTO-HANDOFF %s" % a)
+        self.assertIn("AUTOMATIC HAND-OFF", self.ctx(out))
+        deny = self.hook("PreToolUse", "ia", idle, cwd=root, tool_name="Write", tool_input={"file_path": "x"})
+        self.assertEqual(deny["hookSpecificOutput"]["permissionDecision"], "deny")   # only the hand-off runs
+        self.assertNotIn("hookSpecificOutput", self.hook("PreToolUse", "ia", idle, cwd=root, tool_name="Bash",
+                                                         tool_input={"command": "python x/session_guard.py handoff "
+                                                                                "write TASK-002 --technical t"}))
+        arg = ("--session", a, "--root", root)
+        self.sg("handoff", "write", "TASK-002", "--technical", "t", *arg, ok=True)
+        self.sg("handoff", "note", "--text", "Closed without a hand-off; handed off on wake.", *arg, ok=True)
+        self.sg("handoff", "publish", *arg, ok=True)
+        self.hook("Stop", "ia", idle, cwd=root)
+        rec = json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions", "ia.json")))
+        self.assertIn("break", rec["locks"])                               # locked only after the hand-off
 
     def test_no_new_work_after_the_300k_hand_off(self):
         root = self.migrated("nw")
@@ -813,7 +828,7 @@ class Guard(Base):
         self.start("q", root)
         folder = os.path.join(self.home, ".claude", "session_guard_v2", "follow")
         os.makedirs(folder, exist_ok=True)
-        json.dump({"used_percent": 93, "resets_at": time.time() + 7200, "read_at": time.time()},
+        json.dump({"used_percent": 96, "resets_at": time.time() + 7200, "read_at": time.time()},
                   open(os.path.join(folder, "five_hour.json"), "w"))
         out = self.hook("UserPromptSubmit", "q", self.transcript("q", 1000), cwd=root, prompt="go")
         self.assertIn("QUOTA STOP", self.ctx(out))

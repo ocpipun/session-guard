@@ -44,7 +44,8 @@ def blank(claude_id):
             "break_probe": None, "place": core.place(), "first_ids": [], "unlinked": 0, "source": None,
             "env_file": None, "saved_at": 0, "id_saved": False,
             "last_context": None, "last_reply": None, "break_wake": 0,
-            "backup_sig": None, "handing": None}
+            "backup_sig": None, "handing": None, "handing_kind": None,
+            "host_id": None, "wake_asked": 0}
 
 
 def fix(rec, claude_id):
@@ -149,6 +150,12 @@ def restore(root):
             continue
         core.write_json(p, rec)
         n += 1
+    pdir = os.path.join(root, core.PROJECT_DIRNAME)
+    for folder, sub in (("config", ""), ("config/messages", "messages")):
+        for name, text in gitops.read_state(root, folder).items():
+            dst = os.path.join(pdir, sub, name)
+            if name.endswith(".json") and not os.path.exists(dst):  # the language and translations chosen there
+                core.write_text(dst, text if text.endswith("\n") else text + "\n")
     return n
 
 

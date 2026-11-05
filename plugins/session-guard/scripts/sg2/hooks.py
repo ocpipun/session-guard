@@ -191,6 +191,90 @@ def stop(root, rec, kind, reason):
             pass
 
 
+# --- hand-off before any lock (user decision 2026-11-05) ---------------------------------------------------------
+# A session is never locked while work it owns is not handed off: the break rule, the hard limits, the break watch
+# and the automatic hand-off first mark it as "handing" (no new work, only hand-off commands run), the lock follows
+# in the Stop hook once every hand-off is written and published. A conversation closed without a hand-off (computer
+# or app closed) is woken when Claude starts again, if the break rule or a context hand-off threshold applies to it.
+AUTO_MARK = "SG-AUTO-HANDOFF"
+AUTO_RE = re.compile(r"SG-AUTO-HANDOFF (S-\d{8}-[0-9a-f]{6}(?:-[BI]\d+)*)")
+HAND_OFF_TOOLS = re.compile(r"session_guard\.py\S*\s+(handoff|task\s+(show|note|list))\b")
+
+
+def needs_handoff(data, sid):
+    """Open tasks of sid whose hand-off is missing or not yet published."""
+    if not data or not sid:
+        return []
+    return [t["id"] for t in store.owned_open(data, sid)
+            if not (t["handoff"] and t["handoff"]["source_session"] == sid and t["handoff"]["state"] != "prepared")]
+
+
+def start_handing(root, rec, kind, reason):
+    rec["handing"], rec["handing_kind"] = reason, kind
+    mark_handing(root, rec, reason)
+
+
+def handing_guard(inp):
+    """PreToolUse while handing off: only the hand-off commands run."""
+    rec, known = sessions.load(inp.get("session_id"))
+    if not known or not rec.get("handing") or sessions.closed(rec):
+        return None
+    name = inp.get("tool_name") or ""
+    cmd = str((inp.get("tool_input") or {}).get("command") or "")
+    if name in (measure.USAGE_TOOL, "ToolSearch", "Skill") or (name == "Bash" and HAND_OFF_TOOLS.search(cmd)):
+        return None
+    return deny("Session Guard 2.0: this session is handing off (%s). Only the hand-off runs now: `%s handoff write "
+                "<id> --technical ...`, `%s handoff note --text ...`, `%s handoff publish` (and `task show` / `task "
+                "note`). Nothing else; the session is locked after the hand-off." % (
+                    rec["handing"], sg_cmd(), sg_cmd(), sg_cmd()))
+
+
+def closed_without_handoff(me):
+    """Other sessions on this machine that were closed (not running) with work not handed off, and to which a
+    hand-off rule applies now: the break rule (normal mode, gap over one hour, context over 175k) or a context
+    hand-off threshold (300k normal, 800k long). A short outage (gap under an hour, small context) is none."""
+    out = []
+    for p in glob.glob(os.path.join(sessions.folder(), "*.json")):
+        r = core.read_json(p)
+        if not isinstance(r, dict) or not r.get("sg_id") or r.get("sg_id") == me or not r.get("root"):
+            continue
+        if sessions.closed(sessions.fix(r, r.get("claude_id"))) or r.get("handing"):
+            continue
+        last = r.get("last_reply") or r.get("saved_at") or 0
+        idle = core.now() - last
+        if idle < 10 * 60 or core.now() - (r.get("wake_asked") or 0) < 30 * 60:
+            continue  # maybe still running, or already woken
+        size = r.get("last_context") or 0
+        rule = "break rule (%d h %02d min without a message, context %s)" % (idle // 3600, idle % 3600 // 60,
+                                                                            measure.kfmt(size)) \
+            if not r.get("long") and idle > measure.BREAK_SECONDS and size > measure.BREAK_CONTEXT else \
+            "context %s over the hand-off threshold" % measure.kfmt(size) \
+            if size >= (800 if r.get("long") else 300) * core.K else None
+        if not rule or not store.is_project(r["root"]):
+            continue
+        tasks = needs_handoff(store.load(r["root"]), r["sg_id"])
+        if not tasks:
+            continue
+        r["wake_asked"] = core.now()
+        core.write_json(p, r)
+        out.append((r, tasks, rule))
+    return out
+
+
+def wake_lines(woken):
+    if not woken:
+        return []
+    rows = ["%s (tasks %s; %s; Claude Code session %s; app session %s)" % (
+        r["sg_id"], ", ".join(t), rule, r.get("claude_id"), r.get("host_id") or "unknown") for r, t, rule in woken]
+    return ["AUTOMATIC HAND-OFF NEEDED: %s. These conversations were closed before they could hand off. Wake each one "
+            "now, without asking: send it exactly the message `%s <its SESSION-ID>` with the app's session messaging "
+            "tool (SendMessage or mcp__ccd_session_mgmt__send_message to its app session id; when that id is unknown, "
+            "find the session with search_session_transcripts for its SESSION-ID). It does only its hand-off and is "
+            "locked after it. Tell the user in one line per session. If it cannot be delivered (no such tool, a cloud "
+            "session), tell the user to open that conversation; its next message hands off." % ("; ".join(rows),
+                                                                                                 AUTO_MARK)]
+
+
 # --- identity: a conversation found again from its messages (user decision 2026-11-05) ----------------------
 # Claude Code's session_id is not a stable handle: the desktop app was seen copying a conversation to a new id
 # (2026-11-04, 2026-11-05) and running its first hook before the copy was written; a cloud VM can be rebuilt with a
@@ -396,9 +480,10 @@ def start_context(root, rec, data, source):
         rec["sg_id"], core.place(), "resumed" if source == "resume" else "new", sg_cmd())
     if data:
         head += " · PROJECT-ID %s (%s)" % (data["project_id"], root)
-        idle = idle_line(data, rec["sg_id"])
+        woken = [] if PROJECT_MODE or core.in_cloud() else closed_without_handoff(rec["sg_id"])
+        idle = idle_line(data, rec["sg_id"], {r["sg_id"] for r, _, _ in woken})
         parts.append("\n".join([head] + task_lines(data, rec["sg_id"]) + side_branch_lines(root, data) +
-                               ([idle] if idle else [])))
+                               wake_lines(woken) + ([idle] if idle else [])))
         review = rule_review(root, data, rec)
         if review:
             parts.append(review)
@@ -453,6 +538,7 @@ def on_session_start(inp):
         rec["born"] = core.now() if source in ("startup", "clear", "fork") else (reading.first_at or 0)
         rec["unlinked"], rec["source"] = core.now(), source  # keeps looking for its earlier id (relink)
     rec["env_file"] = os.environ.get("CLAUDE_ENV_FILE") or rec.get("env_file")
+    rec["host_id"] = os.environ.get("CLAUDE_CODE_HOST_SESSION_ID") or rec.get("host_id")  # UNVERIFIED: undocumented
     if source == "compact":
         # Claude Code summarized the conversation: the context is small again, so the one-time notices fire again
         # as it grows. Hand-off steps stay recorded (a hand-off is not written twice).
@@ -595,6 +681,14 @@ def on_prompt(inp):
         return block(quota_text(quota))
 
     notes, user = ([relinked] if relinked else []), []
+    auto = AUTO_RE.search(raw_prompt)
+    auto = bool(auto and auto.group(1) in (rec.get("sg_id"), store.resolve(data, rec.get("sg_id"))) if data else
+                auto and auto.group(1) == rec.get("sg_id"))
+    if auto and needs_handoff(data, rec.get("sg_id")):
+        start_handing(root, rec, rec.get("handing_kind") or "context", "automatic hand-off (closed without one)")
+        notes.append("AUTOMATIC HAND-OFF: this conversation was closed before it could hand off; Session Guard woke it "
+                     "for that only. Do only the hand-off: %s. Run nothing else; the session is locked after it." %
+                     handoff_todo(data, rec["sg_id"]))
     refused = None
     finish = measure.has_command(measure.FINISH, prompt)
     if finish and measure.handed(rec):
@@ -620,6 +714,14 @@ def on_prompt(inp):
         " Background jobs still running: %d (break rule off)." % reading.pending if reading.pending else "")
     limit = measure.LONG_LIMIT if long_mode else measure.NORMAL_LIMIT
     if reading.context is not None and reading.context >= limit and not finish:
+        if needs_handoff(data, rec.get("sg_id")):
+            start_handing(root, rec, "context", "hard limit, context %s" % measure.kfmt(reading.context))
+            sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
+            return emit(ctx("UserPromptSubmit", "[Session Guard 2.0] HARD LIMIT (context %s). Do NOT run the user's "
+                            "message. Do only the hand-off now: %s. Every other tool is refused; the session is locked "
+                            "after the hand-off. Tell the user to continue in a new session." % (
+                                measure.kfmt(reading.context), handoff_todo(data, rec["sg_id"])),
+                            msg("hard_limit", k=measure.kfmt(reading.context))))
         stop(root, rec, "context", "context %s" % measure.kfmt(reading.context))
         sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return block(msg("hard_limit", k=measure.kfmt(reading.context)))
@@ -643,8 +745,8 @@ def on_prompt(inp):
         user.append(msg("finishing"))
     else:
         if br and br[0] == "lock":
-            stop(root, rec, "break", "break over 1 hour, context %s" % measure.kfmt(reading.context))
-            if data:
+            start_handing(root, rec, "break", "break over 1 hour, context %s" % measure.kfmt(reading.context))
+            if data and not auto:
                 try:
                     store.mutate(root, lambda d: store.record_user_command(d, sid, raw_prompt))
                 except (store.Refused, core.Busy):
@@ -904,7 +1006,10 @@ def subagent_check(inp):
 
 def on_pre_tool(inp):
     """The task store is changed only through `sg` (lock, ownership, revision): direct edits are refused. Subagents
-    get only subtasks."""
+    get only subtasks. While a session hands off, only the hand-off commands run."""
+    guarded = handing_guard(inp)
+    if guarded is not None:
+        return guarded
     if inp.get("tool_name") in ("Agent", "Task", "Bash"):
         return subagent_check(inp)
     if inp.get("tool_name") not in EDIT_TOOLS:
@@ -940,9 +1045,8 @@ def on_tool(inp):
     rec["last_context"], rec["last_reply"] = reading.context, reading.last_reply or rec.get("last_reply")
     if rec.get("break_wake") and not sessions.closed(rec) and not subagent(inp):
         rec["break_wake"] = 0
-        rec["handing"] = "break hand-off at %d min (break watch), context %s" % (BREAK_WAKE // 60,
-                                                                                 measure.kfmt(reading.context))
-        mark_handing(root, rec, rec["handing"])
+        start_handing(root, rec, "break", "break hand-off at %d min (break watch), context %s" % (
+            BREAK_WAKE // 60, measure.kfmt(reading.context)))
         sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return 0
     if sessions.closed(rec):
@@ -1007,8 +1111,15 @@ def on_tool(inp):
             measure.kfmt(reading.context), step[2], measure.NOTICE_FORM % (step[0] // core.K)
             + (measure_todo(root) if step[1] in measure.MEASURE_STEPS else "")), msg(step[1]))
         if step[3]:
-            stop(root, rec, "context", "context %s" % measure.kfmt(reading.context))
-            data.update({"continue": False, "stopReason": msg(step[1])})
+            store_data = store.load(root) if root and store.is_project(root) else None
+            if needs_handoff(store_data, rec.get("sg_id")):
+                start_handing(root, rec, "context", "hard limit, context %s" % measure.kfmt(reading.context))
+                data["hookSpecificOutput"]["additionalContext"] += (
+                    " HAND OFF FIRST: do only the hand-off now: %s. Every other tool is refused; the session is "
+                    "locked after the hand-off." % handoff_todo(store_data, rec["sg_id"]))
+            else:
+                stop(root, rec, "context", "context %s" % measure.kfmt(reading.context))
+                data.update({"continue": False, "stopReason": msg(step[1])})
         sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return emit(data)
     hit = None if PROJECT_MODE else measure.quota_hit()
@@ -1043,8 +1154,9 @@ def on_stop(inp):
     def lock_after_handoff():
         # break watch: the lock comes after the hand-off (user decision 2026-11-05)
         if handing:
-            reason, rec["handing"] = rec["handing"], None
-            stop(root, rec, "break", reason)
+            reason, kind = rec["handing"], rec.get("handing_kind") or "break"
+            rec["handing"] = rec["handing_kind"] = None
+            stop(root, rec, kind if kind in ("break", "context", "finish") else "break", reason)
             sessions.save(rec)
         return 0
     if not (handing or {"finish", "break"} & set(rec["locks"]) or measure.handed(rec)
@@ -1155,7 +1267,7 @@ def break_watch(inp):
     return 2
 
 
-def idle_line(data, me):
+def idle_line(data, me, skip=()):
     """2a (user decision 2026-11-05): at session start, other sessions of this project that own open tasks and have
     been idle over one hour, with what the break rule will do to them."""
     rows = []
@@ -1166,7 +1278,7 @@ def idle_line(data, me):
             if r["sg_id"] not in recs or (r.get("saved_at") or 0) > (recs[r["sg_id"]].get("saved_at") or 0):
                 recs[r["sg_id"]] = r
     for sid, srec in sorted(data["sessions"].items()):
-        if sid == me or srec.get("state") != "active":
+        if sid == me or sid in skip or srec.get("state") != "active":
             continue
         tasks = [t["id"] for t in store.owned_open(data, sid) if not t["handoff"]]
         if not tasks:

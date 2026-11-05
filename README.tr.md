@@ -41,9 +41,11 @@ sonra yazılan "start long mode" kuralı atlatmaz (oturum önce devreder).
 içinde mesaj gelmezse (normal mod, bağlam 175k üstünde) Claude'u uyandırır; Claude önbellek henüz geçerliyken (bir
 saatte biter) devreder, oturum Claude çalışmaya başlayınca kilitlenir. Uygulama ya da bilgisayar kapalıysa hiçbir şey
 çalışamaz: mola kuralı yukarıdaki gibi sıradaki mesajda devreye girer. Bulutta makine birkaç dakika boşta kalınca
-duraklatılır (resmi belge), orada da bekçi çalışmaz. **Boşta oturumlar:** oturum başında Claude, projede açık görevi
-olan ve 1 saatten uzun süredir boşta duran diğer oturumları ve mola kuralının onlara ne yapacağını söyler; o
-konuşmayı açarsınız (kendiliğinden devreder) ya da yeni oturum görevi devralır.
+duraklatılır (resmi belge), orada da bekçi çalışmaz. **Devretmeden kapananlar:** Claude yeniden başlayınca
+(bilgisayarda herhangi bir oturum), devretmeden kapanmış (bilgisayar ya da uygulama kapalıydı) ve mola kuralı ya da
+bağlam devir eşiği oluşmuş konuşmalar uygulamanın oturum mesajlarıyla uyandırılır: yalnız devir yaparlar, sonra
+kilitlenirler. Kısa bir kesinti (1 saatten az) hiçbir şeyi uyandırmaz. **Devirden önce kilit yok:** mola kuralı, kesin
+sınırlar ve mola bekçisi oturumu önce devrettirir (yalnız devir komutları çalışır), sonra kilitler.
 
 **Mola ölçümü (isteğe bağlı, varsayılan kapalı).** Moladan sonra devam etmenin size maliyetini görmek için
 Claude'dan `sg breaks on` komutunu çalıştırmasını isteyin. Bu bilgisayardaki bütün oturumlar ve projeler için
@@ -59,7 +61,7 @@ yapmaz, her görevi devredilebilir hâle getirir, devir notlarını yazar, oturu
 yayımlanana kadar Claude çalışmaya devam ettirilir (en fazla iki kez).
 
 ## 4. Kota (bilgisayar)
-5 saatlik kota %90'a ya da haftalık kota %98'e geldiyse ve sıfırlanmaya 45 dakika ya da daha fazla varsa: Claude
+5 saatlik kota %95'e ya da haftalık kota %99'a geldiyse ve sıfırlanmaya 45 dakika ya da daha fazla varsa: Claude
 yeni iş başlatmaz, her görevin nerede kaldığını yazar, 15 dakika sonra oturum sıfırlanmaya kadar kilitlenir.
 Masaüstü uygulamasında uygulamanın kullanım aracından, terminalde durum çubuğundan okunur (token harcamaz).
 Bulutta kota okunamaz (2026-11-03'te ölçüldü: durum çubuğu orada çalışmıyor, kullanım aracı yok); biten kotayı

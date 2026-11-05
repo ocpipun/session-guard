@@ -42,9 +42,12 @@ right after such a break does not skip it (the session hands off first).
 within 55 minutes (normal mode, context over 175k), it wakes Claude to hand off while the prompt cache still holds
 (it expires at one hour), and the session is locked when Claude starts. If the app or computer was closed, nothing
 can run: the break rule acts at the next message as above. In the cloud the VM pauses after a few minutes without
-activity (official docs), so no watch runs there either. **Idle sessions:** at session start Claude tells you about
-other sessions of the project that own open tasks and have been idle over one hour, and what the break rule will do
-to them; you open that conversation (it hands off by itself) or let the new session take the task over.
+activity (official docs), so no watch runs there either. **Closed without a hand-off:** when Claude starts again
+(any session on the computer), conversations that were closed (computer or app off) with work not handed off, and to
+which the break rule or a context hand-off threshold applies, are woken through the app's session messages: they do
+only their hand-off and are locked after it. A short outage (under an hour) wakes nothing. **No lock before the
+hand-off:** the break rule, the hard limits and the break watch first let the session hand off (only hand-off
+commands run), then lock it.
 
 **Break measurement (optional, off by default).** To see what a resumed break costs you, ask Claude to run
 `sg breaks on`. It applies to every session and project on this computer until you run `sg breaks off`. After each
@@ -59,7 +62,7 @@ else, makes every task hand-off ready, writes the hand-offs, takes the session m
 hand-offs are written and published, Claude is kept working (twice at most).
 
 ## 4. Quota (computer)
-5-hour quota at 90% or weekly at 98%, with the reset 45 minutes or more away: Claude starts nothing new, records
+5-hour quota at 95% or weekly at 99%, with the reset 45 minutes or more away: Claude starts nothing new, records
 where each task stopped, and after 15 minutes the session is locked until the reset. Desktop app: read from the
 app's usage tool; terminal: from the status line, at no token cost. In the cloud the quota cannot be read (measured
 2026-11-03: the status line does not run there and there is no usage tool); the app itself reports a used-up quota.

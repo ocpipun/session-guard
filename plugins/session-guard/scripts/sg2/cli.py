@@ -522,10 +522,12 @@ def cmd_install(a):
             return 1
         loc = messages.set_locale(code)
         out("notice language: %s; untranslated: %s" % (loc or "English", ", ".join(messages.missing(loc)) or "none"))
+        cloud_language_backup()
     elif a.action == "messages":
-        loc = core.load_config().get("locale")
+        loc = messages.locale() or core.load_config().get("locale")
         bad = messages.store_translation(loc, core.read_json(a.code, {}) or {}) if loc else ["(no language chosen)"]
         out("stored; rejected: %s" % (", ".join(bad) or "none"))
+        cloud_language_backup()
     return 0
 
 
@@ -665,6 +667,25 @@ def parser():
     v = sub.add_parser("breaks")
     v.add_argument("action", choices=["on", "off", "show"])
     return p
+
+
+def cloud_language_backup():
+    """Cloud: the chosen language and Claude's translations also go to the sg-state branch (a rebuilt VM gets them
+    back at session start)."""
+    pdir = messages.project_dir()
+    root = os.environ.get("CLAUDE_PROJECT_DIR")
+    if not (core.in_cloud() and pdir and root and gitops.is_repo(root)):
+        return
+    files = {}
+    for rel in ["locale.json"] + ["messages/" + n for n in os.listdir(os.path.join(pdir, "messages"))
+                                  if n.endswith(".json")] if os.path.isdir(os.path.join(pdir, "messages")) else \
+            ["locale.json"]:
+        text = core.read_text(os.path.join(pdir, rel))
+        if text:
+            files["config/" + rel] = text
+    if files:
+        r = gitops.write_state(root, files, "Session Guard 2.0: notice language\n\nSESSION-GUARD: 2.0")
+        out("sg-state: %s" % ("VERIFIED" if r.get("verified") else "NOT VERIFIED (%s)" % r.get("why")))
 
 
 def cmd_state_push(a):

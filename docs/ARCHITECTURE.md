@@ -67,6 +67,15 @@ Work first (user decision 2026-11-04): before the note, Claude brings the work t
   pushes HEAD to `sg/<task-id>` (verified with `git ls-remote`). In the cloud, publish refuses while any changed
   file is unsaved, and the Stop hook keeps Claude working (twice at most) after finish, a break or the 300k/800k
   hand-off while files are unsaved or hand-offs unpublished.
+Hand-off before any lock (user decision 2026-11-05): break rule, hard limits (400k / 900k) and the break watch
+mark the session "handing" (store `stopped`; PreToolUse, matcher "*", lets only `sg handoff` / `task show|note|list`
+run); the Stop hook locks it once every hand-off is written and published. Without open work the hard limit stops at
+once as before. Closed without a hand-off: at a computer session start, other machine records with work not handed
+off, not running (idle over 10 minutes), and the break rule (normal, over 1 hour, over 175k) or a context hand-off
+threshold (300k / 800k long) applying, are listed "AUTOMATIC HAND-OFF NEEDED" (once per 30 minutes); Claude sends each
+`SG-AUTO-HANDOFF <SESSION-ID>` through the app's session messaging tool; that prompt makes it hand off only, then it
+is locked. A headless `claude -p --resume` was tried and refused: the app's bundled CLI is not logged in (measured
+2026-11-05). In the cloud a language chosen there and Claude's translations are kept in the project and on sg-state.
 Language (user decision 2026-11-05): every notice to the user comes in their language (no English-only notice); a cloud VM has no config of its own, so `sg install cloud` writes the computer's language and Claude's own translations into `.claude/session-guard2/` (locale.json, messages/), read there in the cloud.
 Break watch (user decision 2026-11-05): a Stop hook (async, asyncRewake, timeout 3900 s) waits 55 minutes after the
 last reply; a newer turn end or a prompt replaces it (token file). Normal mode, over 175k, no own background job,

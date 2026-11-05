@@ -147,6 +147,8 @@ def set_locale(code):
     else:
         cfg["locale"] = code
     core.save_config(cfg)
+    if core.in_cloud() and project_dir():  # a cloud VM forgets its config: the project keeps the choice
+        core.write_json(os.path.join(project_dir(), "locale.json"), {"locale": cfg.get("locale")})
     _cache.clear()
     return cfg.get("locale")
 
@@ -156,5 +158,7 @@ def store_translation(loc, data):
     bad = [n for n in data if n in TRANSLATABLE and not valid(n, data[n])]
     stored.update({n: t for n, t in data.items() if n in TRANSLATABLE and valid(n, t)})
     core.write_json(os.path.join(own_dir(), loc + ".json"), stored)
+    if core.in_cloud() and project_dir():
+        core.write_json(os.path.join(project_dir(), "messages", loc + ".json"), stored)
     _cache.clear()
     return bad

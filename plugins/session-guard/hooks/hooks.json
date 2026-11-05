@@ -32,7 +32,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Agent|Task|Bash",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
