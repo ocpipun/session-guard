@@ -37,6 +37,14 @@ Normal modda, Claude'un son cevabından bu yana 1 saatten fazla geçmişse:
 Claude'un kendi arka plan işini beklemek mola sayılmaz. Uzun modda mola kuralı yoktur; böyle bir moladan hemen
 sonra yazılan "start long mode" kuralı atlatmaz (oturum önce devreder).
 
+**Mola bekçisi (bilgisayar, uygulama açık).** Claude bir cevabı bitirince arka planda bir bekçi başlar. 55 dakika
+içinde mesaj gelmezse (normal mod, bağlam 175k üstünde) Claude'u uyandırır; Claude önbellek henüz geçerliyken (bir
+saatte biter) devreder, oturum Claude çalışmaya başlayınca kilitlenir. Uygulama ya da bilgisayar kapalıysa hiçbir şey
+çalışamaz: mola kuralı yukarıdaki gibi sıradaki mesajda devreye girer. Bulutta makine birkaç dakika boşta kalınca
+duraklatılır (resmi belge), orada da bekçi çalışmaz. **Boşta oturumlar:** oturum başında Claude, projede açık görevi
+olan ve 1 saatten uzun süredir boşta duran diğer oturumları ve mola kuralının onlara ne yapacağını söyler; o
+konuşmayı açarsınız (kendiliğinden devreder) ya da yeni oturum görevi devralır.
+
 **Mola ölçümü (isteğe bağlı, varsayılan kapalı).** Moladan sonra devam etmenin size maliyetini görmek için
 Claude'dan `sg breaks on` komutunu çalıştırmasını isteyin. Bu bilgisayardaki bütün oturumlar ve projeler için
 geçerlidir, `sg breaks off` ile kapanır. 1 saatten uzun her aradan sonra Claude o mesajın başında ve sonunda kotanızı

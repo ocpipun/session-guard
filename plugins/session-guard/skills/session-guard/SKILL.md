@@ -111,9 +111,10 @@ task says who handed it over and when; that session's note under "Hand-off notes
 Session start: propose finishing work handed off first (several: recommend one, the user chooses); only with none
 waiting and new work wanted the backlog, then the ideas (design by questions, promote to the queue, start).
 
-## Break hand-off (BREAK RULE)
+## Break hand-off (BREAK RULE, or BREAK HAND-OFF NOW from the break watch)
 Do not run the user's command; no reading or research for it. Session Guard already stored it word for word in
-each task you own. Do "Hand-off", tell the user to continue in a new session.
+each task you own. Do "Hand-off", tell the user to continue in a new session. Woken by the break watch (55
+minutes without a message): the same, no user command to keep; the session is locked when you start.
 
 ## Finish session
 Do nothing else the message asks. 1. "Hand-off". 2. Run the `report` command from the instruction; read the

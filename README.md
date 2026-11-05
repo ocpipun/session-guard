@@ -38,6 +38,14 @@ Normal mode, more than 1 hour since Claude's last reply:
 Waiting for Claude's own background job is not a break. Long mode has no break rule; "start long mode" written
 right after such a break does not skip it (the session hands off first).
 
+**Break watch (computer, app open).** When Claude ends a reply, a background watch starts. If no message comes
+within 55 minutes (normal mode, context over 175k), it wakes Claude to hand off while the prompt cache still holds
+(it expires at one hour), and the session is locked when Claude starts. If the app or computer was closed, nothing
+can run: the break rule acts at the next message as above. In the cloud the VM pauses after a few minutes without
+activity (official docs), so no watch runs there either. **Idle sessions:** at session start Claude tells you about
+other sessions of the project that own open tasks and have been idle over one hour, and what the break rule will do
+to them; you open that conversation (it hands off by itself) or let the new session take the task over.
+
 **Break measurement (optional, off by default).** To see what a resumed break costs you, ask Claude to run
 `sg breaks on`. It applies to every session and project on this computer until you run `sg breaks off`. After each
 gap over 1 hour Claude reads your quota (desktop app only) at the start and at the end of that turn; with the last

@@ -60,6 +60,12 @@ Work first (user decision 2026-11-04): before the note, Claude brings the work t
   pushes HEAD to `sg/<task-id>` (verified with `git ls-remote`). In the cloud, publish refuses while any changed
   file is unsaved, and the Stop hook keeps Claude working (twice at most) after finish, a break or the 300k/800k
   hand-off while files are unsaved or hand-offs unpublished.
+Break watch (user decision 2026-11-05): a Stop hook (async, asyncRewake, timeout 3900 s) waits 55 minutes after the
+last reply; a newer turn end or a prompt replaces it (token file). Normal mode, over 175k, no own background job,
+the turn closed: exit 2 wakes Claude ("BREAK HAND-OFF NOW"); the break lock is set at its first PostToolUse, so a wake
+that never comes leaves the session as it was (the break rule acts at the next prompt). Not in the cloud (the VM
+pauses after a few minutes). Idle line (2a): session start lists the project's other active sessions owning open
+tasks without a hand-off, idle over one hour (machine record: last reply, context, mode, locks).
 Session notes (user decisions 2026-11-05): after its task hand-offs a session writes ONE general note (`sg handoff
 note --text`; signature, date, quota snapshot added; at most 600 characters); `handoff publish` refuses without one
 listing every prepared hand-off. Several stand at once (one per session) under "Hand-off notes" in STATUS. A new

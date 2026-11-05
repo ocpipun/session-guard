@@ -609,6 +609,57 @@ class Guard(Base):
         self.assertEqual(json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions",
                                                      "n1.json")))["sg_id"], a)
 
+    def break_watch(self, cid, transcript, cwd):
+        data = {"hook_event_name": "Stop", "session_id": cid, "transcript_path": transcript, "cwd": cwd}
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--break-watch"], input=json.dumps(data).encode(),
+                           capture_output=True, env=self.env, timeout=60)
+        return r.returncode, r.stderr.decode("utf-8")
+
+    def test_break_watch_wakes_claude_at_55_minutes_and_locks_when_it_starts(self):
+        root = self.migrated("bw")
+        _, a = self.start("bw", root, self.transcript("bw", 5000))
+        self.sg("task", "new", "--title", "A", "--approval", "ok", "--session", a, "--root", root, ok=True)
+        idle = self.transcript("bw", 210000, minutes_ago=56)     # the last reply 56 minutes ago, 210k
+        code, err = self.break_watch("bw", idle, root)
+        self.assertEqual(code, 2)                                 # asyncRewake: Claude is woken
+        self.assertIn("BREAK HAND-OFF NOW (56 min", err)
+        self.assertIn("TASK-002", err)
+        out = self.hook("PostToolUse", "bw", idle, cwd=root, tool_name="Bash")   # Claude starts: locked now
+        rec = json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions", "bw.json")))
+        self.assertIn("break", rec["locks"])
+        self.assertEqual(self.hook("UserPromptSubmit", "bw", idle, cwd=root, prompt="hi").get("decision"), "block")
+
+    def test_break_watch_stays_quiet_in_long_mode_small_context_or_when_the_user_is_back(self):
+        root = self.migrated("bq")
+        _, a = self.start("bq", root, self.transcript("bq", 5000))
+        self.assertEqual(self.break_watch("bq", self.transcript("bq", 150000, minutes_ago=56), root)[0], 0)  # <=175k
+        env = dict(self.env, SESSION_GUARD_BREAK_WAKE="6")        # the user comes back while the watch waits
+        data = {"hook_event_name": "Stop", "session_id": "bq", "cwd": root,
+                "transcript_path": self.transcript("bq", 210000, minutes_ago=0)}
+        w = subprocess.Popen([sys.executable, "-I", SCRIPT, "--break-watch"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        w.stdin.write(json.dumps(data).encode())
+        w.stdin.close()
+        time.sleep(2)
+        self.hook("UserPromptSubmit", "bq", data["transcript_path"], cwd=root, prompt="I am back")
+        self.assertEqual(w.wait(timeout=90), 0)
+        w.stdout.close()
+        w.stderr.close()
+        _, b = self.start("bl", root, self.transcript("bl", 5000))
+        self.hook("UserPromptSubmit", "bl", self.transcript("bl", 5000), cwd=root, prompt="start long mode")
+        self.assertEqual(self.break_watch("bl", self.transcript("bl", 210000, minutes_ago=56), root)[0], 0)
+
+    def test_session_start_tells_about_idle_sessions_with_open_tasks(self):
+        root = self.migrated("il")
+        _, a = self.start("ia", root, self.transcript("ia", 5000))
+        self.sg("task", "new", "--title", "A", "--approval", "ok", "--session", a, "--root", root, ok=True)
+        self.hook("PostToolUse", "ia", self.transcript("ia", 220000, minutes_ago=130), cwd=root, tool_name="Bash")
+        out, b = self.start("ib", root, self.transcript("ib", 1000))
+        text = self.ctx(out)
+        self.assertIn("IDLE SESSIONS WITH OPEN TASKS: %s owns TASK-002; idle 2 h 10 min, context 220k, break rule "
+                      "applies" % a, text)
+        self.assertIn("--takeover", text)
+
     def test_long_mode_hands_off_at_800k_not_700k(self):
         root = self.project()
         self.start("h", root)

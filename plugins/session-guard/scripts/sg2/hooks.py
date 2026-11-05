@@ -12,6 +12,7 @@ Verified against the official hook docs (code.claude.com/docs/en/hooks.md, 2026-
 - Hooks also fire inside subagents (agent_id present): those calls never trigger notices or locks.
 On any error a hook exits 0 silently: it must never break the user's work.
 """
+import glob
 import json
 import os
 import re
@@ -25,6 +26,7 @@ ENTRY = None          # set by session_guard.py
 PROJECT_MODE = False  # repository copy (cloud)
 WATCH_SECONDS = int(os.environ.get("SESSION_GUARD_WATCH_SECONDS") or 24 * 3600)
 WATCH_STEP = 60
+BREAK_WAKE = int(os.environ.get("SESSION_GUARD_BREAK_WAKE") or 55 * 60)  # tests shorten it
 EXECUTIVE = "session-guard-executive"
 STORE_DIR_MARK = core.PROJECT_DIRNAME.replace("\\", "/")
 STALE_JOBS = ("WARNING (24 hours): %d background job(s) or subagent(s) started over 24 hours ago never reported back. "
@@ -377,7 +379,9 @@ def start_context(root, rec, data, source):
         rec["sg_id"], core.place(), "resumed" if source == "resume" else "new", sg_cmd())
     if data:
         head += " · PROJECT-ID %s (%s)" % (data["project_id"], root)
-        parts.append("\n".join([head] + task_lines(data, rec["sg_id"]) + side_branch_lines(root, data)))
+        idle = idle_line(data, rec["sg_id"])
+        parts.append("\n".join([head] + task_lines(data, rec["sg_id"]) + side_branch_lines(root, data) +
+                               ([idle] if idle else [])))
         review = rule_review(root, data, rec)
         if review:
             parts.append(review)
@@ -539,6 +543,9 @@ def on_prompt(inp):
         rec["born"] = rec.get("born") or core.now()
         rec["self"] = ENTRY
     relinked = relink(root, rec, reading)
+    core.write_text(break_token_path(cid), "prompt")  # the user is back: a waiting break watch stops
+    rec["break_wake"] = 0
+    rec["last_context"], rec["last_reply"] = reading.context, reading.last_reply
     if act == "setup":
         sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return emit(inactive(act, "UserPromptSubmit"))
@@ -906,6 +913,13 @@ def on_tool(inp):
         sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": relinked}})
     save_identity(root, rec, reading)
+    rec["last_context"], rec["last_reply"] = reading.context, reading.last_reply or rec.get("last_reply")
+    if rec.get("break_wake") and not sessions.closed(rec) and not subagent(inp):
+        rec["break_wake"] = 0
+        stop(root, rec, "break", "break hand-off at %d min (break watch), context %s" % (
+            BREAK_WAKE // 60, measure.kfmt(reading.context)))
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
+        return 0
     if sessions.closed(rec):
         return 0
     quota = rec["locks"].get("quota")
@@ -1057,6 +1071,93 @@ def watch(inp):
     return 2
 
 
+def break_token_path(cid):
+    return os.path.join(core.state_dir(), "breakwatch", core.safe_name(cid))
+
+
+def break_watch(inp):
+    """Break watch (user decision 2026-11-05): an async hook started when Claude ends a turn; a newer turn end or a
+    prompt replaces it. 55 minutes after the last reply with no new message, in normal mode and over 175k, it wakes
+    Claude (asyncRewake, exit 2) to hand off while the prompt cache still holds (it expires at one hour; the break
+    rule would stop the next message anyway). The break lock is set only when Claude really starts (PostToolUse);
+    if the wake never comes (app closed), the break rule acts at the next message as before."""
+    cid = inp.get("session_id")
+    if PROJECT_MODE or subagent(inp):
+        return 0
+    token_path = break_token_path(cid)
+    token = "%f %d" % (time.time(), os.getpid())
+    core.write_text(token_path, token)
+    reading = measure.read_transcript(inp.get("transcript_path"))
+    rec, known = sessions.load(cid, reading.ids + reading.first_ids)
+    if not known or rec["long"] or sessions.closed(rec) or reading.last_reply is None:
+        return 0
+    wake_at = reading.last_reply + BREAK_WAKE
+    while time.time() < wake_at:
+        time.sleep(max(0, min(WATCH_STEP, wake_at - time.time())))
+        if core.read_text(token_path) != token:
+            return 0
+    root = core.project_root(inp)
+    if activation(root) != "active":
+        return 0
+    reading = measure.read_transcript(inp.get("transcript_path"))
+    rec, known = sessions.load(cid, reading.ids + reading.first_ids)
+    if not known or rec["long"] or rec["locks"] or reading.pending or reading.turn_open or reading.last_reply is None \
+            or time.time() - reading.last_reply < BREAK_WAKE or (reading.context or 0) <= measure.BREAK_CONTEXT:
+        return 0
+    rec["break_wake"] = time.time()
+    sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
+    data = store.load(root) if root else None
+    sys.stderr.write(
+        "[Session Guard 2.0] BREAK HAND-OFF NOW (%d min without a user message, context %s > 175k, normal mode): "
+        "the prompt cache expires at one hour and the break rule would stop the next message, so hand off now "
+        "while it is cheap. Do only skill session-guard \"Break hand-off\": %s. Start nothing else. The session is "
+        "locked when you start; tell the user in one line that the work is handed off and to continue in a new "
+        "session." % ((time.time() - reading.last_reply) // 60, measure.kfmt(reading.context),
+                      handoff_todo(data, rec["sg_id"])))
+    return 2
+
+
+def idle_line(data, me):
+    """2a (user decision 2026-11-05): at session start, other sessions of this project that own open tasks and have
+    been idle over one hour, with what the break rule will do to them."""
+    rows = []
+    recs = {}
+    for p in glob.glob(os.path.join(sessions.folder(), "*.json")):
+        r = core.read_json(p)
+        if isinstance(r, dict) and r.get("sg_id") and r.get("project_id") == data["project_id"]:
+            if r["sg_id"] not in recs or (r.get("saved_at") or 0) > (recs[r["sg_id"]].get("saved_at") or 0):
+                recs[r["sg_id"]] = r
+    for sid, srec in sorted(data["sessions"].items()):
+        if sid == me or srec.get("state") != "active":
+            continue
+        tasks = [t["id"] for t in store.owned_open(data, sid) if not t["handoff"]]
+        if not tasks:
+            continue
+        r = recs.get(sid)
+        if not r:
+            rows.append("%s owns %s; no record on this machine (another place, or it ended without a hand-off)" % (
+                sid, ", ".join(tasks)))
+            continue
+        last = r.get("last_reply") or r.get("saved_at")
+        if not last or core.now() - last < measure.BREAK_SECONDS:
+            continue
+        ctxk = r.get("last_context")
+        rule = "long mode: no break rule" if r.get("long") else (
+            "break rule applies: its next message hands off and locks it" if (ctxk or 0) > measure.BREAK_CONTEXT
+            else "break reminder only (context <= 175k)")
+        if sessions.closed(sessions.fix(r, r.get("claude_id"))):
+            rule = "locked without a hand-off"
+        rows.append("%s owns %s; idle %d h %02d min, context %s, %s" % (
+            sid, ", ".join(tasks), (core.now() - last) // 3600, (core.now() - last) % 3600 // 60,
+            measure.kfmt(ctxk), rule))
+    if not rows:
+        return None
+    return ("IDLE SESSIONS WITH OPEN TASKS: %s. Tell the user in one line per session (in their language). The work "
+            "is not handed off yet: either the user opens that conversation and sends any message (it hands off by "
+            "itself under the break rule, or goes on in long mode), or this session takes a task over with the "
+            "user's yes (`%s task claim <id> --takeover \"<their words>\"`)." % ("; ".join(rows), sg_cmd()))
+
+
 def dispatch(inp, args):
     event = inp.get("hook_event_name")
     if event == "SessionStart":
@@ -1069,6 +1170,8 @@ def dispatch(inp, args):
         return on_pre_tool(inp)
     if event == "PostToolUse":
         return on_tool(inp)
+    if event == "Stop" and "--break-watch" in args:
+        return break_watch(inp)
     if event == "Stop":
         return on_stop(inp)
     if event == "SessionEnd":

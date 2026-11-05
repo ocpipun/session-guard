@@ -33,6 +33,9 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
 - Break (normal mode): gap > 1 hour and context > 175k -> do NOT run the user's command and do no reading or
   research for it; hand off every task you own (Session Guard already stored the command word for word).
   Context <= 175k -> remind in one line, then continue. Waiting for your own background job is not a break.
+  Computer, app open: 55 minutes after your last reply with no message (normal mode, over 175k) Session Guard
+  wakes you ("BREAK HAND-OFF NOW"): do only the break hand-off; the session is locked when you start. At session
+  start "IDLE SESSIONS WITH OPEN TASKS" lists other sessions idle over 1 hour: tell the user in one line each.
 - "finish session" (any mode): only hand-offs and session measurement, nothing else. Commands ("start long mode",
   "finish session", "continue installation") count only at the end of the message, or at its start followed by
   a comma or period. After a hard stop, a break hand-off, "finish session", a quota stop, a completed hand-over

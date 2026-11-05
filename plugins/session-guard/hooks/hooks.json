@@ -61,6 +61,13 @@
             "type": "command",
             "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; [ -f \"$S\" ] || exit 0; if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"$S\"; else python3 -I \"$S\"; fi",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/session_guard.py\"; [ -f \"$S\" ] || exit 0; if [ \"$OS\" = \"Windows_NT\" ]; then python -I \"$S\" --break-watch; else python3 -I \"$S\" --break-watch; fi",
+            "timeout": 3900,
+            "async": true,
+            "asyncRewake": true
           }
         ]
       }

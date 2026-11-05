@@ -39,7 +39,8 @@ def blank(claude_id):
     return {"signature": "SESSION-GUARD: 2.0", "claude_id": claude_id, "sg_id": None, "self": None, "root": None, "project_id": None,
             "born": None, "long": False, "locks": {}, "notified": [], "ids": [], "asked_at": 0, "stop_blocks": 0,
             "break_probe": None, "place": core.place(), "first_ids": [], "unlinked": 0, "source": None,
-            "env_file": None, "saved_at": 0, "id_saved": False}
+            "env_file": None, "saved_at": 0, "id_saved": False,
+            "last_context": None, "last_reply": None, "break_wake": 0}
 
 
 def fix(rec, claude_id):
