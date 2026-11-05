@@ -162,6 +162,13 @@ def install_copy(root):
         shutil.copytree(os.path.join(PLUGIN_ROOT, sub), os.path.join(dst, sub),
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copyfile(os.path.join(PLUGIN_ROOT, "manifest.json"), os.path.join(dst, "manifest.json"))
+    from . import messages
+    loc = core.load_config().get("locale")
+    if loc:  # the cloud has no config of its own: the language and Claude's own translations go with the project
+        core.write_json(os.path.join(root, core.PROJECT_DIRNAME, "locale.json"), {"locale": loc})
+        own = core.read_json(os.path.join(messages.own_dir(), loc + ".json"))
+        if isinstance(own, dict) and own:
+            core.write_json(os.path.join(root, core.PROJECT_DIRNAME, "messages", loc + ".json"), own)
     skills = os.path.join(root, ".claude", "skills")
     for name, folder in (("session-guard", "session-guard"), ("setup", "session-guard-setup")):
         text = core.read_text(os.path.join(PLUGIN_ROOT, "skills", name, "SKILL.md"))

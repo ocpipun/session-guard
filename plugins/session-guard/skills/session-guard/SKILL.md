@@ -108,13 +108,16 @@ Session Guard removes empty lines and empty bullets an edit leaves behind.
 (session start lists "HAND-OFF BRANCHES"): `sg handoff adopt sg/task-...` merges its work and hand-off here
 (conflicts in your own files stop it and change nothing); then `sg task claim <id>`. The "Agents" line under a
 task says who handed it over and when; that session's note under "Hand-off notes" is its overall assessment.
+Only a hand-off is free: a task whose owner ended or is locked without one ("NOT HANDED OFF") stays with it until
+the user opens that conversation and it hands off; take it only on the user's explicit yes (`--takeover`).
 Session start: propose finishing work handed off first (several: recommend one, the user chooses); only with none
 waiting and new work wanted the backlog, then the ideas (design by questions, promote to the queue, start).
 
 ## Break hand-off (BREAK RULE, or BREAK HAND-OFF NOW from the break watch)
 Do not run the user's command; no reading or research for it. Session Guard already stored it word for word in
 each task you own. Do "Hand-off", tell the user to continue in a new session. Woken by the break watch (55
-minutes without a message): the same, no user command to keep; the session is locked when you start.
+minutes without a message): the same, no user command to keep; the session is locked after the hand-off
+(Session Guard keeps you working until it is written and published). While handing off, no new task, no claim.
 
 ## Finish session
 Do nothing else the message asks. 1. "Hand-off". 2. Run the `report` command from the instruction; read the

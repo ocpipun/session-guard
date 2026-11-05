@@ -125,6 +125,9 @@ A 24-hour watch tells the user when a turn or a background job has been running 
   taken over yet (several: it recommends one, you choose). Only when none waits and you want new work: a queued
   task (TASK_BACKLOG.md); queue empty: an idea (IDEA_TASKS.md), designed with you by questions, put in the queue,
   then started. The backlog and ideas are read only then; the archive only when needed, by search.
+- **No work taken without a hand-off:** a task is free to take only when its owner handed it off. A session that
+  hands off takes no new task and cannot take its work back; one that ended or is locked without a hand-off keeps
+  its tasks until you open that conversation (it then hands off), or you explicitly approve a takeover.
 - **Who worked on a task:** under each task in STATUS an "Agents" line lists every session that owned it, in order,
   with dates and "handed off" where it was handed over.
 - **Hand-off notes:** every session that hands off work writes one short general note (`sg handoff note`): its

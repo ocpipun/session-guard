@@ -34,8 +34,10 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
   research for it; hand off every task you own (Session Guard already stored the command word for word).
   Context <= 175k -> remind in one line, then continue. Waiting for your own background job is not a break.
   Computer, app open: 55 minutes after your last reply with no message (normal mode, over 175k) Session Guard
-  wakes you ("BREAK HAND-OFF NOW"): do only the break hand-off; the session is locked when you start. At session
-  start "IDLE SESSIONS WITH OPEN TASKS" lists other sessions idle over 1 hour: tell the user in one line each.
+  wakes you ("BREAK HAND-OFF NOW"): do only the break hand-off; the session is locked after it. At session start
+  "IDLE SESSIONS WITH OPEN TASKS" lists other sessions idle over 1 hour: tell the user in one line each.
+- A session that hands off (300k / 800k, break, finish, hard stop) takes no new task and takes nothing back:
+  Session Guard refuses `task new`, `start`, `claim` and promotions for it.
 - "finish session" (any mode): only hand-offs and session measurement, nothing else. Commands ("start long mode",
   "finish session", "continue installation") count only at the end of the message, or at its start followed by
   a comma or period. After a hard stop, a break hand-off, "finish session", a quota stop, a completed hand-over
@@ -84,8 +86,9 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
 - READING: at session start CLAUDE.md and STATUS.md (given to you). For new work only the check above. The
   archive only when really needed, by search (Grep), never whole: Session Guard 2.0 entries by id (TASK-xxx,
   IDEA-xxx, R-xxx, S-...), pre-2.0 entries (no 2.0 id) by keywords.
-- TASKS: work only on a task you own. Continuing a task keeps its id (claim it: `sg task claim <id>`). A task owned
-  by another active session is not yours: ask the user. A new active main task needs the user's approval
+- TASKS: work only on a task you own. Continuing a task keeps its id (claim it: `sg task claim <id>`). Only a
+  handed-off task is free to claim; one owned by another session (active, ended or locked) without a hand-off is
+  not yours: ask the user (Session Guard refuses it without `--takeover "<their words>"`). A new active main task needs the user's approval
   (`--approval "<their words>"`). Subtasks are free. Unrelated work goes to the ideas (`sg idea add`), not into
   a new task. Redoing a task finished wrongly, or adding a feature to a finished one, is a NEW task (`sg task
   reopen <id>`), linked to the old one. A finished subtask never finishes its parent.
@@ -102,8 +105,9 @@ RULES = """[Session Guard 2.0] Rules for this session (plugin session-guard, SES
   could enforce. A rule-script task is done only with `--verified "<how it was checked>"`; then Session Guard
   removes its rule from CLAUDE.md. Until then the rule stays.
 - SESSION START, in this order (STATUS is given; read nothing else for it): 1. work handed off and not taken over
-  (hand-offs waiting, orphaned tasks): propose finishing one (recommend one; with several the user chooses); read it
-  with `sg task show <id>` before claiming. 2. Only when none waits and the user wants new work: a queued task
+  (hand-offs waiting): propose finishing one (recommend one; with several the user chooses); read it with `sg task
+  show <id>` before claiming. A task whose owner ended or is locked WITHOUT a hand-off is not taken ("NOT HANDED
+  OFF"): tell the user to open that conversation so it hands off; a takeover only on their explicit yes. 2. Only when none waits and the user wants new work: a queued task
   (docs/TASK_BACKLOG.md). 3. Queue empty: an idea (docs/IDEA_TASKS.md): design it with the user by questions,
   promote it to the queue, then start it. Backlog and ideas are read only then, or when the user adds work.
 - HAND-OFF: first bring each task you own to a hand-off-ready point (finish the small step in progress, leave

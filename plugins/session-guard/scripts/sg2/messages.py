@@ -60,7 +60,7 @@ MESSAGES = {
                             "restored from its pull request).",
     "status_restored": "STATUS.md task block was edited by hand; Session Guard restored it from the task store.",
 }
-ENGLISH_ONLY = {"v1_still_installed"}
+ENGLISH_ONLY = set()  # every notice to the user comes in their language (user decision 2026-11-05)
 TRANSLATABLE = [n for n in MESSAGES if n not in ENGLISH_ONLY]
 PLACEHOLDER = re.compile(r"%\((\w+)\)[sd]")
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -81,9 +81,19 @@ def _load(path):
     return data if isinstance(data, dict) else {}
 
 
+def project_dir():
+    """Cloud: the project's Session Guard folder carries the language chosen on the computer (a cloud VM has no
+    config of its own; user decision 2026-11-05: notices in the user's language there too)."""
+    root = os.environ.get("CLAUDE_PROJECT_DIR")
+    return os.path.join(root, core.PROJECT_DIRNAME) if root else None
+
+
 def translations(locale):
     if locale not in _cache:
         found = {n: t for n, t in _load(os.path.join(PLUGIN_ROOT, "messages", locale + ".json")).items() if valid(n, t)}
+        if core.in_cloud() and project_dir():
+            found.update({n: t for n, t in _load(os.path.join(project_dir(), "messages", locale + ".json")).items()
+                          if valid(n, t)})
         found.update({n: t for n, t in _load(os.path.join(own_dir(), locale + ".json")).items() if valid(n, t)})
         _cache[locale] = found
     return _cache[locale]
@@ -93,7 +103,10 @@ def locale():
     """The chosen language; English in the terminal. UNVERIFIED: CLAUDE_CODE_ENTRYPOINT is not documented."""
     if not core.in_cloud() and os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop":
         return None
-    return core.load_config().get("locale")
+    loc = core.load_config().get("locale")
+    if not loc and core.in_cloud() and project_dir():
+        loc = _load(os.path.join(project_dir(), "locale.json")).get("locale")
+    return loc if isinstance(loc, str) and re.match(r"^[a-z]{2,3}(-[a-z0-9]{2,8})*$", loc) else None
 
 
 def msg(name, **values):

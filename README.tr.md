@@ -129,6 +129,9 @@ Kilitli oturuma mesaj ulaşmaz; kullanıcıya nedeni söylenir. Türleri:
   (birden fazlaysa birini önerir, sen seçersin). Bekleyen iş yoksa ve yeni iş istersen: sıradaki görev
   (TASK_BACKLOG.md); sıra boşsa bir fikir (IDEA_TASKS.md), seninle sorularla tasarlanır, sıraya konur, sonra
   başlatılır. Backlog ve fikirler yalnız o zaman okunur; arşiv yalnız gerektiğinde, aranarak.
+- **Devir olmadan iş alınmaz:** bir görev ancak sahibi onu devrettiyse alınabilir. Devreden oturum yeni görev
+  almaz, devrettiği işi geri alamaz; devretmeden kapanan ya da kilitlenen oturumun görevleri, o konuşmayı açıp
+  devrettirene kadar onda kalır (ya da devralmayı açıkça onaylarsınız).
 - **Görevde kim çalıştı:** STATUS'ta her görevin altındaki "Agents" satırı, görevi sırayla alan bütün oturumları
   tarihleriyle ve devredildiği yerde "handed off" ile gösterir.
 - **Devir notları:** işi devreden her oturum tek, kısa bir genel not yazar (`sg handoff note`): imzası, tarih, kota

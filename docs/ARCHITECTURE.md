@@ -39,8 +39,11 @@ start per project only after its migration is verified.
   ids are listed in `legacy_sessions` only.
 
 ## 3. Task rules (enforced in code, tested)
-- Owner only changes a task; claiming is free when there is no owner, the owner ended or is locked, or a hand-off
-  waits; an active owner keeps it unless the user approves a takeover. Owner history is never deleted.
+- Owner only changes a task; claiming is free only when a hand-off waits or there is no owner (user decision
+  2026-11-05: no agent takes work its owner has not handed off); an owner that is active, ended or locked without
+  a hand-off keeps it unless the user approves a takeover. A session that hands off (300k / 800k, break, break
+  watch, finish, hard stop; store `stopped`) or is locked gets no new task, start, claim or promotion. The break
+  watch locks the session after its hand-off (Stop hook), not before. Owner history is never deleted.
 - At most 10 normal and 3 urgent main tasks per working agent (active sessions owning an active main task, plus
   the asking one; subagents are not agents) (urgent: reason + approval, listed first; while one is active no new, queued, started or promoted
   task); setup and migration tasks exempt; subtasks unlimited. A new main task needs the user's approval text;
@@ -64,6 +67,7 @@ Work first (user decision 2026-11-04): before the note, Claude brings the work t
   pushes HEAD to `sg/<task-id>` (verified with `git ls-remote`). In the cloud, publish refuses while any changed
   file is unsaved, and the Stop hook keeps Claude working (twice at most) after finish, a break or the 300k/800k
   hand-off while files are unsaved or hand-offs unpublished.
+Language (user decision 2026-11-05): every notice to the user comes in their language (no English-only notice); a cloud VM has no config of its own, so `sg install cloud` writes the computer's language and Claude's own translations into `.claude/session-guard2/` (locale.json, messages/), read there in the cloud.
 Break watch (user decision 2026-11-05): a Stop hook (async, asyncRewake, timeout 3900 s) waits 55 minutes after the
 last reply; a newer turn end or a prompt replaces it (token file). Normal mode, over 175k, no own background job,
 the turn closed: exit 2 wakes Claude ("BREAK HAND-OFF NOW"); the break lock is set at its first PostToolUse, so a wake

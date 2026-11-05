@@ -291,6 +291,16 @@ def _parents_work(data, sid, t):
     return bool(above) and any(o["session"] in above for o in t["owners"])
 
 
+def _not_handing_off(data, sid):
+    """A session that hands off (300k / 800k hand-off, break, finish, hard stop, break watch) takes no new work and
+    takes nothing back (user decision 2026-11-05): no new task or subtask, no start, no claim, no promotion."""
+    rec = data["sessions"].get(sid) or {}
+    if rec.get("stopped") or rec.get("state") == "locked":
+        raise Refused("session %s is handing off (%s): it takes no new task and takes nothing back. Finish its "
+                      "hand-offs; new work goes to a new session" % (sid, (rec.get("stopped") or {}).get("reason")
+                                                                    or rec.get("lock_reason") or "locked"))
+
+
 def _kind_allows(data, sid, t=None, parent=None):
     """The kinds never take each other's work: a bound child session agent works only on subtasks of its parent's
     work; an independent one never on its parent's work. t: a task taken over; parent: a new task's parent."""
@@ -443,6 +453,7 @@ def new_task(data, sid, title, kind="normal", priority="P2", parent=None, approv
         raise Refused("kind must be one of " + ", ".join(KINDS))
     if priority not in PRIORITIES:
         raise Refused("priority must be one of " + ", ".join(PRIORITIES))
+    _not_handing_off(data, sid)
     _kind_allows(data, sid, parent=parent and task(data, parent)["id"])
     if parent:
         p = task(data, parent)
@@ -502,6 +513,7 @@ def start(data, sid, tid):
     t = task(data, tid)
     if t["status"] != QUEUED:
         raise Refused("%s is %s, not queued" % (tid, t["status"]))
+    _not_handing_off(data, sid)
     _kind_allows(data, sid, t=t)
     _no_new_while_urgent(data, sid)
     normal, _ = main_counts(data)
@@ -523,8 +535,9 @@ def _transfer(data, t, new_owner, how):
 
 
 def claim(data, sid, tid, takeover_approval=None):
-    """Takes over a task. Free: no owner, the owner's session ended or locked, or the task carries a hand-off.
-    An active owner keeps it unless the user approved a takeover. The old owner's history is kept."""
+    """Takes over a task. Free only when the task carries a hand-off or has no owner (user decision 2026-11-05: no
+    agent takes work its owner has not handed off). An owner that is active, ended or locked without a hand-off
+    keeps it unless the user approved a takeover. The old owner's history is kept."""
     t = task(data, tid)
     if t["status"] in CLOSED:
         raise Refused("%s is %s. Redoing or extending it is a new task: `sg task reopen %s`" % (tid, t["status"], tid))
@@ -533,6 +546,7 @@ def claim(data, sid, tid, takeover_approval=None):
         raise Refused("session %s is locked" % sid)
     if t["owner"] == sid:
         return "already yours"
+    _not_handing_off(data, sid)
     _kind_allows(data, sid, t=t)
     old = t["owner"]
     old_rec = data["sessions"].get(old) if old else None
@@ -540,10 +554,14 @@ def claim(data, sid, tid, takeover_approval=None):
         how = "hand-off from %s" % t["handoff"]["source_session"]
     elif old is None:
         how = "claimed (no owner)"
-    elif old_rec is None or old_rec["state"] in ("ended", "locked"):
-        how = "claimed (owner %s %s)" % (old, old_rec["state"] if old_rec else "unknown")
     elif (takeover_approval or "").strip():
         how = "takeover approved by user: %s" % takeover_approval.strip()
+    elif old_rec is None or old_rec["state"] in ("ended", "locked"):
+        raise Refused("%s is owned by %s, which %s WITHOUT a hand-off. Do not take it: tell the user to open that "
+                      "conversation and send any message, so it hands off (break rule) or goes on. Only if the user "
+                      "explicitly wants this session to take it anyway: `sg task claim %s --takeover \"<the user's "
+                      "words>\"`" % (tid, old, "ended" if not old_rec or old_rec["state"] == "ended" else "is locked",
+                                     tid))
     else:
         raise Refused("%s is owned by %s, which is still active. Do not take it; ask the user. With the user's "
                       "yes: `sg task claim %s --takeover \"<the user's words>\"`" % (tid, old, tid))

@@ -32,5 +32,6 @@
   "status_restored": "STATUS.md görev bölümü elle değiştirilmişti; Session Guard onu görev kaydından yeniden oluşturdu.",
   "long_refused": "Uzun mod açılamaz: devir 300k'da hazırlandı. Mesajınız iletilmedi. Bu oturum 400k'ya kadar yalnız soru cevaplar; işe yeni bir oturumda devam edin (uzun mod orada açılabilir).",
   "finish_refused": "\"finish session\" kullanılamaz: devir %(k)s'da hazırlandı. Mesajınız iletilmedi. Sorunuzu komutsuz yazın ya da yeni bir oturum açın.",
-  "side_branches_merged": "Ana dala birleştirilmiş, GitHub'da silinebilecek yan dallar: %(names)s. Bunlar Session Guard'ın değil, projenin kendi işini taşır; git birleştirilen dalı kendiliğinden silmez. Öneri: GitHub'da depo Settings > General > Pull Requests > \"Automatically delete head branches\" ayarını açarsanız her birleştirilen pull request'in dalı kendiliğinden silinir (silinen dal, pull request sayfasından geri yüklenebilir)."
+  "side_branches_merged": "Ana dala birleştirilmiş, GitHub'da silinebilecek yan dallar: %(names)s. Bunlar Session Guard'ın değil, projenin kendi işini taşır; git birleştirilen dalı kendiliğinden silmez. Öneri: GitHub'da depo Settings > General > Pull Requests > \"Automatically delete head branches\" ayarını açarsanız her birleştirilen pull request'in dalı kendiliğinden silinir (silinen dal, pull request sayfasından geri yüklenebilir).",
+  "v1_still_installed": "Session Guard 1.x hâlâ kurulu: güncelleme bitene kadar 2.0 pasif kalır (çift koruma olmaz)."
 }

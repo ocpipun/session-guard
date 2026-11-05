@@ -333,7 +333,10 @@ class Tasks(Base):
         # S1 has no store record: register both as active sessions through their session starts
         out, sg_a = self.start("ca", self.root)
         out, sg_b = self.start("cb", self.root)
-        self.sg("task", "claim", "TASK-002", "--session", sg_a, "--root", self.root, ok=True)
+        self.assertIn("WITHOUT a hand-off", self.sg("task", "claim", "TASK-002", "--session", sg_a, "--root",
+                                                    self.root, ok=False))       # no hand-off: not free any more
+        self.sg("task", "claim", "TASK-002", "--session", sg_a, "--root", self.root, "--takeover", "user: take it",
+                ok=True)
         self.assertIn("still active", self.sg("task", "claim", "TASK-002", "--session", sg_b, "--root", self.root,
                                               ok=False))
         self.assertIn("only its owner", self.sg("task", "note", "TASK-002", "--done", "x", "--session", sg_b,
@@ -425,8 +428,12 @@ class Tasks(Base):
             self.sg("task", "new", "--title", n, "--approval", "ok", "--session", a, "--root", self.root, ok=True)
         self.hook("SessionEnd", "ha", cwd=self.root, reason="other")
         out, _ = self.start("hb", self.root)
-        self.assertIn("SEVERAL TASKS CAN BE TAKEN OVER", self.ctx(out))
+        self.assertIn("NOT HANDED OFF: TASK-002", self.ctx(out))           # never taken without a hand-off
+        self.assertNotIn("SEVERAL TASKS CAN BE TAKEN OVER", self.ctx(out))
         self.assertIn("ORPHANED", self.text(self.root, "docs", "STATUS.md"))
+        _, b = self.start("hb2", self.root)
+        self.assertIn("WITHOUT a hand-off", self.sg("task", "claim", "TASK-002", "--session", b, "--root", self.root,
+                                                    ok=False))
 
     def test_session_notes_agents_line_and_outdated_note_to_archive(self):
         status = lambda: self.text(self.root, "docs", "STATUS.md")
@@ -624,10 +631,22 @@ class Guard(Base):
         self.assertEqual(code, 2)                                 # asyncRewake: Claude is woken
         self.assertIn("BREAK HAND-OFF NOW (56 min", err)
         self.assertIn("TASK-002", err)
-        out = self.hook("PostToolUse", "bw", idle, cwd=root, tool_name="Bash")   # Claude starts: locked now
-        rec = json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions", "bw.json")))
-        self.assertIn("break", rec["locks"])
+        self.hook("PostToolUse", "bw", idle, cwd=root, tool_name="Bash")         # Claude starts: handing off
+        path = os.path.join(self.home, ".claude", "session_guard_v2", "sessions", "bw.json")
+        self.assertNotIn("break", json.load(open(path))["locks"])               # not locked before the hand-off
+        arg = ("--session", a, "--root", root)
+        self.assertIn("is handing off", self.sg("task", "new", "--title", "B", "--approval", "ok", *arg, ok=False))
         self.assertEqual(self.hook("UserPromptSubmit", "bw", idle, cwd=root, prompt="hi").get("decision"), "block")
+        out = self.hook("Stop", "bw", idle, cwd=root)
+        self.assertEqual(out.get("decision"), "block")                           # hand-off first
+        self.sg("handoff", "write", "TASK-002", "--technical", "x", *arg, ok=True)
+        self.sg("handoff", "note", "--text", "Break hand-off.", *arg, ok=True)
+        self.sg("handoff", "publish", *arg, ok=True)
+        self.assertNotIn("decision", self.hook("Stop", "bw", idle, cwd=root))
+        self.assertIn("break", json.load(open(path))["locks"])                  # locked after the hand-off
+        _, b = self.start("bw2", root, self.transcript("bw2", 1000))
+        self.sg("task", "claim", "TASK-002", "--session", b, "--root", root, ok=True)   # the hand-off is free
+        self.assertIn("is locked", self.sg("task", "claim", "TASK-002", *arg, ok=False))  # never taken back
 
     def test_break_watch_stays_quiet_in_long_mode_small_context_or_when_the_user_is_back(self):
         root = self.migrated("bq")
@@ -658,7 +677,21 @@ class Guard(Base):
         text = self.ctx(out)
         self.assertIn("IDLE SESSIONS WITH OPEN TASKS: %s owns TASK-002; idle 2 h 10 min, context 220k, break rule "
                       "applies" % a, text)
-        self.assertIn("--takeover", text)
+        self.assertIn("so it is not taken here", text)
+        idle_row = [l for l in text.splitlines() if l.startswith("IDLE SESSIONS")][0]
+        self.assertNotIn("--takeover", idle_row)                  # no takeover offered for work not handed off
+
+    def test_no_new_work_after_the_300k_hand_off(self):
+        root = self.migrated("nw")
+        _, a = self.start("nw", root, self.transcript("nw", 5000))
+        self.sg("task", "new", "--title", "A", "--approval", "ok", "--session", a, "--root", root, ok=True)
+        out = self.hook("UserPromptSubmit", "nw", self.transcript("nw", 305000), cwd=root, prompt="go on")
+        self.assertIn("HAND-OFF", self.ctx(out))
+        self.assertIn("is handing off", self.sg("task", "new", "--title", "B", "--approval", "ok", "--session", a,
+                                                "--root", root, ok=False))
+        self.assertIn("is handing off", self.sg("task", "new", "--title", "b", "--parent", "TASK-002", "--session",
+                                                a, "--root", root, ok=False))
+        self.sg("handoff", "write", "TASK-002", "--technical", "x", "--session", a, "--root", root, ok=True)
 
     def test_long_mode_hands_off_at_800k_not_700k(self):
         root = self.project()
@@ -1387,6 +1420,23 @@ class Places(Base):
         self.assertEqual(json.loads(r.stdout.decode())["decision"], "block")
         r = subprocess.run(["bash", "-c", cmds[0]], capture_output=True, env=self.env)
         self.assertEqual(r.stdout, b"")
+
+    def test_cloud_notices_come_in_the_users_language(self):
+        """A cloud VM has no Session Guard config: the language chosen on the computer goes with the project copy."""
+        self.sg("install", "language", "tr", ok=True)
+        root = self.project("cloudtr", git=True)
+        self.sg("install", "cloud", root)
+        self.assertEqual(json.load(open(os.path.join(root, ".claude", "session-guard2", "locale.json")))["locale"],
+                         "tr")
+        os.remove(os.path.join(self.home, ".claude", "session_guard_v2", "config.json"))   # the VM's empty home
+        copy = os.path.join(root, ".claude", "session-guard2", "bin", "scripts", "session_guard.py")
+        env = dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=root)
+        out = json.loads(subprocess.run([sys.executable, "-I", copy, "--project"], capture_output=True, env=env,
+                                        input=json.dumps({"hook_event_name": "SessionStart", "session_id": "t1",
+                                                          "transcript_path": "x", "cwd": root,
+                                                          "source": "startup"}).encode()).stdout.decode())
+        tr = json.load(open(os.path.join(PLUGIN, "messages", "tr.json"), encoding="utf-8"))
+        self.assertEqual(out.get("systemMessage"), "Session Guard: " + tr["migration_pending"])
 
     def test_cloud_copy_idempotent_replaces_v1_and_quiet_beside_plugin(self):
         root = self.project("cloudp", git=True, files={".claude/settings.json": json.dumps({"hooks": {"SessionStart": [

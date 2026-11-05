@@ -44,7 +44,7 @@ def blank(claude_id):
             "break_probe": None, "place": core.place(), "first_ids": [], "unlinked": 0, "source": None,
             "env_file": None, "saved_at": 0, "id_saved": False,
             "last_context": None, "last_reply": None, "break_wake": 0,
-            "backup_sig": None}
+            "backup_sig": None, "handing": None}
 
 
 def fix(rec, claude_id):

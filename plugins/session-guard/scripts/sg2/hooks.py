@@ -172,6 +172,15 @@ def with_parent_lock(rec, data):
     return True
 
 
+def mark_handing(root, rec, reason):
+    """The session hands off: marked in the store, which then refuses it any new or taken-back work."""
+    if root and rec.get("sg_id") and store.is_project(root):
+        try:
+            store.mutate(root, lambda d: store.mark_stopped(d, rec["sg_id"], reason), render=False)
+        except (store.Refused, core.Busy):
+            pass
+
+
 def stop(root, rec, kind, reason):
     """A permanent lock (context, finish, break), also marked in the store for the sessions started from this one."""
     sessions.lock(rec, kind, reason)
@@ -315,18 +324,26 @@ def task_lines(data, sid):
     (propose finishing one); only when there is none and new work is wanted the backlog, then the ideas."""
     mine = store.owned_open(data, sid)
     out = ["Your tasks: " + (", ".join("%s (%s)" % (t["id"], t["status"]) for t in mine) or "none")]
-    can = sorted(store.claimable(data, sid), key=lambda t: (t["kind"] != "urgent", t["priority"], store.sort_key(t["id"])))
+    every = store.claimable(data, sid)
+    can = sorted((t for t in every if t["handoff"] or not t["owner"]),
+                 key=lambda t: (t["kind"] != "urgent", t["priority"], store.sort_key(t["id"])))
+    stuck = [t for t in every if t not in can]
+    if stuck:
+        out.append("NOT HANDED OFF: %s. Their owner ended or is locked without a hand-off: do not take them. Tell the "
+                   "user to open that conversation and send any message, so it hands off (break rule) and is locked; "
+                   "then they can be claimed here. A takeover without a hand-off only on the user's explicit yes." % (
+                       ", ".join("%s (owner %s)" % (t["id"], t["owner"]) for t in stuck)))
     if len(can) > 1:
         out.append("SEVERAL TASKS CAN BE TAKEN OVER (%s). Unless the user's message is about one of them, propose "
                    "first to finish one of these (recommend %s: urgent and higher priority first; read it with `sg task "
                    "show <id>`); the user chooses, do not claim before that." % (", ".join(
-                       "%s%s" % (t["id"], " hand-off" if t["handoff"] else " orphaned/free") for t in can), can[0]["id"]))
+                       "%s%s" % (t["id"], " hand-off" if t["handoff"] else " no owner") for t in can), can[0]["id"]))
     elif can:
         t = can[0]
         out.append("One task can be taken over: %s \"%s\"%s. If the user's message is about it, read it (`sg task show "
                    "%s`) and claim it; otherwise propose first to finish it, and ask." % (
                        t["id"], t["title"], " (hand-off waiting)" if t["handoff"] else "", t["id"]))
-    elif not mine:
+    elif not mine and not stuck:
         out.append("No task waits to be taken over. New work only when the user wants it, in this order: a queued "
                    "task (docs/TASK_BACKLOG.md, %d queued; `sg task start <id>`), else an idea (docs/IDEA_TASKS.md, %d): "
                    "design it with the user by questions, put it in the queue (`sg idea promote <id> --queue "
@@ -566,6 +583,9 @@ def on_prompt(inp):
     if closed_now(rec, data):
         sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return block(lock_text(rec))
+    if rec.get("handing"):
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
+        return block(msg("closed_break"))  # the break watch hand-off is running; the lock follows it
     quota = rec["locks"].get("quota")
     if quota and measure.quota_cleared(quota):
         del rec["locks"]["quota"]
@@ -665,6 +685,8 @@ def on_prompt(inp):
             if step[1] not in rec["notified"]:
                 rec["notified"].append(step[1])
                 user.append(msg(step[1]))
+                if step[1] in measure.HANDOFF_STEPS:
+                    mark_handing(root, rec, "hand-off: %s at %s" % (step[1], measure.kfmt(reading.context)))
         hit = None if PROJECT_MODE else measure.quota_hit()
         if hit:
             quota_lock(rec, hit)
@@ -918,8 +940,9 @@ def on_tool(inp):
     rec["last_context"], rec["last_reply"] = reading.context, reading.last_reply or rec.get("last_reply")
     if rec.get("break_wake") and not sessions.closed(rec) and not subagent(inp):
         rec["break_wake"] = 0
-        stop(root, rec, "break", "break hand-off at %d min (break watch), context %s" % (
-            BREAK_WAKE // 60, measure.kfmt(reading.context)))
+        rec["handing"] = "break hand-off at %d min (break watch), context %s" % (BREAK_WAKE // 60,
+                                                                                 measure.kfmt(reading.context))
+        mark_handing(root, rec, rec["handing"])
         sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return 0
     if sessions.closed(rec):
@@ -978,6 +1001,8 @@ def on_tool(inp):
     step = measure.step_for(reading.context, rec["long"])
     if step and step[1] not in rec["notified"]:
         rec["notified"].append(step[1])
+        if step[1] in measure.HANDOFF_STEPS:
+            mark_handing(root, rec, "hand-off: %s at %s" % (step[1], measure.kfmt(reading.context)))
         data = ctx("PostToolUse", "[Session Guard] Context: %s (during work). %s%s" % (
             measure.kfmt(reading.context), step[2], measure.NOTICE_FORM % (step[0] // core.K)
             + (measure_todo(root) if step[1] in measure.MEASURE_STEPS else "")), msg(step[1]))
@@ -1011,19 +1036,30 @@ def on_stop(inp):
     if activation(root) != "active" or subagent(inp):
         return 0
     rec, known = sessions.load(inp.get("session_id"))
-    if not known or rec.get("stop_blocks", 0) >= 2 or not (
-            {"finish", "break"} & set(rec["locks"]) or measure.handed(rec) or "parent_handoff" in rec["notified"]):
+    if not known:
+        return 0
+    handing = bool(rec.get("handing")) and not sessions.closed(rec)
+
+    def lock_after_handoff():
+        # break watch: the lock comes after the hand-off (user decision 2026-11-05)
+        if handing:
+            reason, rec["handing"] = rec["handing"], None
+            stop(root, rec, "break", reason)
+            sessions.save(rec)
+        return 0
+    if not (handing or {"finish", "break"} & set(rec["locks"]) or measure.handed(rec)
+            or "parent_handoff" in rec["notified"]):
         return 0
     data = store.load(root) if root else None
-    if not data:
-        return 0
+    if not data or rec.get("stop_blocks", 0) >= 2:
+        return lock_after_handoff()
     sid = rec["sg_id"]
     missing = store.missing_handoffs(data, sid)
     unpublished = [t["id"] for t in store.owned_open(data, sid) if t["handoff"] and t["handoff"]["state"] == "prepared"]
     unsaved = gitops.changed_files(root) if core.in_cloud() and gitops.is_repo(root) and store.owned_open(data, sid) \
         else []
     if not missing and not unpublished and not unsaved:
-        return 0
+        return lock_after_handoff()
     rec["stop_blocks"] = rec.get("stop_blocks", 0) + 1
     sessions.save(rec)
     todo = []
@@ -1155,9 +1191,9 @@ def idle_line(data, me):
     if not rows:
         return None
     return ("IDLE SESSIONS WITH OPEN TASKS: %s. Tell the user in one line per session (in their language). The work "
-            "is not handed off yet: either the user opens that conversation and sends any message (it hands off by "
-            "itself under the break rule, or goes on in long mode), or this session takes a task over with the "
-            "user's yes (`%s task claim <id> --takeover \"<their words>\"`)." % ("; ".join(rows), sg_cmd()))
+            "is not handed off yet, so it is not taken here: the user opens that conversation and sends any message; "
+            "it hands off by itself (break rule) and is locked, or goes on in long mode. Only after its hand-off can "
+            "a task be claimed (`%s task claim <id>`)." % ("; ".join(rows), sg_cmd()))
 
 
 def dispatch(inp, args):
