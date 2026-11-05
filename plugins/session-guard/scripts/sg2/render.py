@@ -48,6 +48,48 @@ def _short(items, keep):
     return "; ".join(items[-keep:]) + " (+%d more: `sg task show`)" % (len(items) - keep)
 
 
+def agents_line(t, keep):
+    """Who worked on a task, in order, with dates: "S-a 11-03→11-04 handed off · S-b 11-04→now"."""
+    owners = t.get("owners") or []
+    rows = []
+    for i, o in enumerate(owners):
+        nxt = owners[i + 1] if i + 1 < len(owners) else None
+        end = "now" if not o.get("to") else o["to"][5:10]
+        how = " handed off" if nxt and str(nxt.get("how", "")).startswith("hand-off from") else ""
+        rows.append("%s %s→%s%s" % (o["session"], (o.get("from") or "")[5:10], end, how))
+    if t["handoff"]:
+        rows[-1] += " · hand-off written %s" % t["handoff"]["created"][5:10]
+    if keep and len(rows) > keep:
+        rows = ["(+%d earlier)" % (len(rows) - keep)] + rows[-keep:]
+    return "- Agents (%d): %s" % (len(dict.fromkeys(o["session"] for o in owners)), " · ".join(rows) or "-")
+
+
+def quota_text(q):
+    if not q:
+        return "quota n/a"
+    part = lambda n, label: "%s %s%%" % (label, int(q[n]["percent"])) if (q.get(n) or {}).get("percent") is not None \
+        else "%s n/a" % label
+    age = max((v.get("age_min") or 0) for v in q.values())
+    return "quota %s / %s (read %d min before)" % (part("five_hour", "5-hour"), part("weekly", "weekly"), age)
+
+
+def note_lines(data, compact=0):
+    from . import store
+    notes = sorted((data.get("session_notes") or {}).values(), key=lambda n: n["created"])
+    lines = ["", "## Hand-off notes (%d)" % len(notes)]
+    if not notes:
+        lines.append("- None")
+    for n in notes:
+        text = n["text"] if compact < 2 else n["text"][:120] + ("…" if len(n["text"]) > 120 else "")
+        if n["kind"] == "project-state":
+            lines.append("- PROJECT STATE by %s · %s · %s: %s" % (n["session"], n["created"][:10], quota_text(
+                n.get("quota")), text))
+        else:
+            lines.append("- %s · %s · tasks %s · %s: %s" % (n["session"], n["created"][:10], ", ".join(
+                store.note_task_state(data, n, tid) for tid in n["tasks"]), quota_text(n.get("quota")), text))
+    return lines
+
+
 def block_lines(data, compact=0):
     """compact 0: full; 1: shorter lists; 2: one line per task (a view, never a limit on work)."""
     from . import store
@@ -73,6 +115,7 @@ def block_lines(data, compact=0):
         if compact < 2:
             lines.append("- Done: " + _short(t["done"], keep))
             lines.append("- Pending: " + _short(t["pending"], keep + 1))
+        lines.append(agents_line(t, (0, 3, 2)[compact]))
         kids = [c for c in _descendants(data, t["id"]) if c["status"] in store.ACTIVE]
         if kids:
             if compact:
@@ -96,7 +139,7 @@ def block_lines(data, compact=0):
             t["id"], h["source_session"], h["created"][:10], h["state"],
             " (%s)" % push.get("commit", "")[:8] if push.get("commit") else "",
             " · work on %s" % w["branch"] if w.get("mode") == "side-branch" else "", t["id"]))
-    return lines
+    return lines + note_lines(data, compact)
 
 
 def _descendants(data, tid):
@@ -271,10 +314,11 @@ def append_completed(root, data, tid):
     path = doc(root, "COMPLETED_TASKS.md")
     if not os.path.exists(path):
         core.append_text(path, COMPLETED_HEAD)
-    owners = ", ".join(dict.fromkeys(o["session"] for o in t["owners"]))
+    owners = " → ".join(dict.fromkeys(o["session"] for o in t["owners"]))
     rel = "; related " + ", ".join("%s (%s)" % (r["task"], r["relation"]) for r in t["related"]) if t["related"] else ""
-    core.append_text(path, "- %s %s %s %s · %s · %s · owners %s%s\n" % (
-        core.today(), SIGN, data["project_id"], tid, t["title"], t["status"], owners, rel))
+    result = t.get("result") or (t["done"][-1] if t["done"] else "-")
+    core.append_text(path, "- %s %s %s %s · %s · %s · result: %s · agents %s%s\n" % (
+        core.today(), SIGN, data["project_id"], tid, t["title"], t["status"], result, owners, rel))
 
 
 def append_archive(root, title, lines):
@@ -326,6 +370,11 @@ def after_change(root, data, events):
             append_completed(root, data, ev[1])
         elif ev[0] == "handoff_claimed":
             append_archive(root, "Hand-off %s from %s (claimed)" % (ev[1], ev[2]["source_session"]), handoff_lines(ev[2]))
+        elif ev[0] == "note_retired":
+            n = ev[2]
+            append_archive(root, "Hand-off note of %s (outdated by %s's note)" % (ev[1], ev[3]), [
+                "%s %s · tasks %s · %s: %s" % (n["kind"], n["created"][:16], ", ".join(n["tasks"]) or "-",
+                                              quota_text(n.get("quota")), n["text"])])
         elif ev[0] == "session_locked":
             append_archive(root, "Session %s locked" % ev[1], [ev[2]])
     render_status(root, data)

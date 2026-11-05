@@ -53,6 +53,14 @@ Work first (user decision 2026-11-04): before the note, Claude brings the work t
   pushes HEAD to `sg/<task-id>` (verified with `git ls-remote`). In the cloud, publish refuses while any changed
   file is unsaved, and the Stop hook keeps Claude working (twice at most) after finish, a break or the 300k/800k
   hand-off while files are unsaved or hand-offs unpublished.
+Session notes (user decisions 2026-11-05): after its task hand-offs a session writes ONE general note (`sg handoff
+note --text`; signature, date, quota snapshot added; at most 600 characters); `handoff publish` refuses without one
+listing every prepared hand-off. Several stand at once (one per session) under "Hand-off notes" in STATUS. A new
+note retires (archive, one line) every older note none of whose tasks still waits with that session's hand-off, and
+every older project-state note. An agent whose last task is closed writes `--project-state` (from
+COMPLETED_TASKS.md). Each task shows an "Agents" line from its owner history. `task done|cancel` needs `--summary`
+(one sentence, at most 200 characters): COMPLETED_TASKS.md gets the result and the agents in order. Session start:
+claimable work is proposed first (urgent, then priority); with none, the backlog, then the ideas.
 States: prepared → published (side branch, push verified) or local (kept in the folder) → claimed (archived in
 STATUS_ARCHIVE.md, append only). Not repeated when unchanged or when the task is finished. The source session is
 locked when its last open task is claimed.

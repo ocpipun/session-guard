@@ -554,11 +554,19 @@ def close(data, sid, tid, status="done", summary=None, force=False, verified=Non
     _check_owner(data, sid, t)
     if t["status"] in CLOSED:
         return "already " + t["status"]
+    given = " ".join((summary or "").split())
+    if len(given) > 200:
+        raise Refused("--summary has %d characters; at most 200: one plain sentence" % len(given))
+    summary = given
+    if not summary and not (t["kind"] == "rule-script" and status == "done" and t.get("rule")):
+        raise Refused("pass --summary \"<the result in one plain sentence>\" (cancelled: why): it goes to "
+                      "docs/COMPLETED_TASKS.md, from which the project's state is judged later")
     if t["kind"] == "rule-script" and status == "done" and t.get("rule"):
         if not (verified or "").strip():
             raise Refused("%s replaces rule %s with a script: pass --verified \"<how you checked that it works>\" "
                           "(the rule line is removed from CLAUDE.md then)" % (tid, t["rule"]))
         t["done"].append("verified: " + verified.strip())
+        summary = summary or "verified: " + " ".join(verified.split())
         r = (data.get("rules") or {}).get(t["rule"])
         if r:
             r["state"], r["replaced_by"] = "replaced by script", tid
@@ -568,8 +576,9 @@ def close(data, sid, tid, status="done", summary=None, force=False, verified=Non
         raise Refused("%s has open subtasks (%s): close them first, or pass --force after asking the user" % (
             tid, ", ".join(open_kids)))
     t["status"], t["completed"], t["updated"] = status, core.iso(), core.iso()
-    if summary:
-        t["done"].append(summary.strip())
+    t["result"] = summary
+    if summary not in t["done"]:
+        t["done"].append(summary)
     for o in t["owners"]:
         if o["to"] is None:
             o["to"] = core.iso()
@@ -683,6 +692,77 @@ def mark_published(data, sid, pushes):
     return n
 
 
+# --- session notes (user decisions 2026-11-05) ----------------------------------------------------
+# One general note per session that handed off work: its signature, date, the quota readings Session Guard holds and
+# the agent's short overall assessment. Several can stand at once (several agents). A hand-off note is outdated once
+# none of its tasks waits with that session's hand-off any more and a newer note exists: then it goes to the archive as
+# one line. An agent whose tasks are all finished writes a "project state" note instead (from COMPLETED_TASKS.md);
+# any newer note retires it.
+NOTE_MAX = 600
+
+
+def _note_key(n):
+    return "%s@%s" % (n["session"], n["created"])
+
+
+def _still_waiting(data, sid, tid):
+    t = data["tasks"].get(tid)
+    return bool(t and t["status"] in ACTIVE and t["handoff"] and t["handoff"]["source_session"] == sid)
+
+
+def session_note(data, sid, text, quota=None, project_state=False):
+    text = " ".join((text or "").split())
+    if not text:
+        raise Refused("a session note needs --text: your overall assessment in 2-3 sentences (what this session did, "
+                      "the state it leaves, what the next agent should look at first)")
+    if len(text) > NOTE_MAX:
+        raise Refused("the note has %d characters; at most %d: keep it to 2-3 sentences, details belong in the task "
+                      "hand-offs" % (len(text), NOTE_MAX))
+    if project_state:
+        mine = owned_open(data, sid)
+        if mine:
+            raise Refused("you still own open tasks (%s): finish or hand them off first; a project state note is for "
+                          "an agent whose tasks are all finished" % ", ".join(t["id"] for t in mine))
+        handed = []
+    else:
+        handed = sorted((t["id"] for t in data["tasks"].values() if _still_waiting(data, sid, t["id"])), key=sort_key)
+        if not handed:
+            raise Refused("no hand-off of yours is waiting: write them first (`sg handoff write <id> --technical ...`). "
+                          "All your tasks finished: `sg handoff note --project-state --text \"...\"`")
+    notes = data.setdefault("session_notes", {})
+    old = notes.get(sid)
+    if old:
+        data.setdefault("notes_retired", []).append(_note_key(old))
+    notes[sid] = {"session": sid, "kind": "project-state" if project_state else "hand-off", "created": core.iso(),
+                  "tasks": handed, "quota": quota or {}, "text": text}
+    retire_notes(data, sid)
+    return notes[sid]
+
+
+def retire_notes(data, newest):
+    """Older notes the newest one makes outdated go to the archive (event note_retired, one line each)."""
+    notes = data.get("session_notes") or {}
+    for s, n in sorted(notes.items()):
+        if s == newest or n["created"] > notes[newest]["created"]:
+            continue
+        if n["kind"] == "project-state" or not any(_still_waiting(data, s, tid) for tid in n["tasks"]):
+            data.setdefault("notes_retired", []).append(_note_key(n))
+            data["events"].append(("note_retired", s, dict(n), newest))
+            del notes[s]
+
+
+def note_task_state(data, n, tid):
+    """For the STATUS view: what happened to a task a hand-off note lists."""
+    t = data["tasks"].get(tid)
+    if not t:
+        return tid
+    if _still_waiting(data, n["session"], tid):
+        return "%s waiting" % tid
+    if t["status"] not in ACTIVE:
+        return "%s %s" % (tid, t["status"])
+    return "%s taken by %s" % (tid, t["owner"] or "nobody")
+
+
 def missing_handoffs(data, sid):
     return [t["id"] for t in owned_open(data, sid) if not (t["handoff"] and t["handoff"]["source_session"] == sid)]
 
@@ -745,6 +825,14 @@ def merge(ours, theirs):
         if iid not in out["ideas"] or idea["state"] != "waiting":
             out["ideas"][iid] = idea
     out["rules"] = dict(theirs.get("rules") or {}, **(ours.get("rules") or {}))
+    out["notes_retired"] = list(dict.fromkeys((theirs.get("notes_retired") or []) + (ours.get("notes_retired") or [])))
+    gone = set(out["notes_retired"])
+    notes = {}
+    for side in (theirs, ours):
+        for sid, n in (side.get("session_notes") or {}).items():
+            if _note_key(n) not in gone and (sid not in notes or n["created"] >= notes[sid]["created"]):
+                notes[sid] = n
+    out["session_notes"] = notes
     for f in ("next_task", "next_idea", "next_rule", "next_pre20_idea", "rev"):
         out[f] = max(ours.get(f) or 0, theirs.get(f) or 0)
     out["rev"] += 1

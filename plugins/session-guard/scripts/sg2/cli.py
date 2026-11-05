@@ -164,6 +164,11 @@ def cmd_task(a):
                                                       summary=a.summary, force=a.force, verified=a.verified),
                          expect_rev=exp)
         out("%s %s" % (a.id, r if isinstance(r, str) else r["status"]))
+        data = store.load(root)
+        if not isinstance(r, str) and r["parent"] is None and not store.owned_open(data, sid):
+            out("ALL YOUR TASKS ARE FINISHED. Before new work, write the project state for the next agent: read "
+                "docs/COMPLETED_TASKS.md (only it), judge in 2-3 plain sentences where the project stands and what is "
+                "left, then `sg handoff note --project-state --text \"...\"` (it replaces older notes made outdated).")
     elif a.action == "reopen":
         t = store.mutate(root, lambda d: store.reopen(d, sid, a.id, a.title, a.relation, a.approval), expect_rev=exp)
         out("created %s (%s %s)" % (t["id"], a.relation, a.id))
@@ -381,6 +386,13 @@ def cmd_handoff(a):
                  len(work.get("uncommitted") or []))
         out("%s hand-off %s · work: %s" % (a.id, r, where))
         return 0
+    if a.action == "note":
+        q = measure.quota_snapshot() if not core.in_cloud() else {}
+        n = store.mutate(root, lambda d: store.session_note(d, sid, a.text, quota=q, project_state=a.project_state))
+        out("%s note written (%s; %s). It stands in STATUS under \"Hand-off notes\"; older notes it makes outdated "
+            "went to the archive." % (sid, "project state" if a.project_state else "tasks " + ", ".join(n["tasks"]),
+                                      render.quota_text(n["quota"])))
+        return 0
     # publish: side-branch work is committed with Session Guard's files and pushed to each task's branch (verified);
     # work kept in the folder (computer) needs no push: the next session opens the same folder.
     data = store.load(root)
@@ -388,6 +400,13 @@ def cmd_handoff(a):
         raise store.Refused("not a 2.0 project: " + root)
     mine = [t for t in data["tasks"].values() if t["handoff"] and t["handoff"]["source_session"] == sid
             and t["handoff"]["state"] == "prepared"]
+    note = (data.get("session_notes") or {}).get(sid)
+    lack = [t["id"] for t in mine if not note or note["kind"] != "hand-off" or t["id"] not in note["tasks"]]
+    if lack:
+        raise store.Refused("write your session note first (it must list %s): `sg handoff note --text \"<your overall "
+                            "assessment in 2-3 sentences: what this session did, the state it leaves, what to look at "
+                            "first>\"`; Session Guard adds your signature, the date and the quota readings" %
+                            ", ".join(lack))
     side = [t for t in mine if (t.get("work") or {}).get("mode") == "side-branch"]
     pushes = {}
     if side and gitops.is_repo(root):
@@ -601,7 +620,9 @@ def parser():
     u.add_argument("--conflict")
 
     h = sub.add_parser("handoff", parents=[common])
-    h.add_argument("action", choices=["children", "write", "publish", "adopt"])
+    h.add_argument("action", choices=["children", "write", "note", "publish", "adopt"])
+    h.add_argument("--text")
+    h.add_argument("--project-state", action="store_true")
     h.add_argument("--children-gone")
     h.add_argument("id", nargs="?")
     h.add_argument("--paths", nargs="+")

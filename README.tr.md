@@ -112,8 +112,19 @@ Kilitli oturuma mesaj ulaşmaz; kullanıcıya nedeni söylenir. Türleri:
 - **Güvenli paralel yazma:** proje başına bir kilit, kilit içinde taze okuma, sürüm denetimi; görev kaydının elle
   değiştirilmesi reddedilir, STATUS.md'deki görev bölümü elle bozulursa kayıttan yeniden oluşturulur. Her
   oturum yalnız kendisi olarak çalışır: başka bir oturumun kimliğiyle verilen `sg` komutu reddedilir.
-- **Oturum başı:** Claude kimliklerini, görevlerini ve devralabileceği görevleri alır; birden fazlası varsa hangisi
-  olduğunu kullanıcıya sorar.
+- **Oturum başı:** yalnız STATUS.md okunur. Claude önce devredilmiş ama henüz alınmamış işi bitirmeyi önerir
+  (birden fazlaysa birini önerir, sen seçersin). Bekleyen iş yoksa ve yeni iş istersen: sıradaki görev
+  (TASK_BACKLOG.md); sıra boşsa bir fikir (IDEA_TASKS.md), seninle sorularla tasarlanır, sıraya konur, sonra
+  başlatılır. Backlog ve fikirler yalnız o zaman okunur; arşiv yalnız gerektiğinde, aranarak.
+- **Görevde kim çalıştı:** STATUS'ta her görevin altındaki "Agents" satırı, görevi sırayla alan bütün oturumları
+  tarihleriyle ve devredildiği yerde "handed off" ile gösterir.
+- **Devir notları:** işi devreden her oturum tek, kısa bir genel not yazar (`sg handoff note`): imzası, tarih, kota
+  ölçümleri ve genel değerlendirmesi. Notlar STATUS'un en altında, oturum başına bir tane durur (birden fazla ajan:
+  birden fazla not). Bir notun devrettiği işin hepsi alınıp daha yeni bir not yazılınca, eski not arşive tek satır
+  olarak gider; böylece büyük projelerde de STATUS kısa kalır.
+- **Biten görevler:** her görev tek cümlelik bir sonuçla kapanır (`sg task done <id> --summary "..."`);
+  COMPLETED_TASKS.md'ye tek satır yazılır: tarih, kimlik, başlık, sonuç, ajanlar. Bütün görevleri biten ajan, devir
+  notu yerine bu dosyadan bir "proje durumu" notu yazar.
 
 ## 7. İşi saklayan devirler
 Her görevin kendi devir notu vardır: proje, görev ve oturum kimlikleri, oturumun üst ve alt oturumları, son
@@ -141,7 +152,7 @@ eski oturum kilitlenir. Alınan devir notları `STATUS_ARCHIVE.md`'ye geçer.
 | `docs/STATUS_ARCHIVE.md` | geçmiş; yalnız eklenir; oturum başında okunmaz, yalnız aranır |
 | `docs/TASK_BACKLOG.md` | sıradaki görevler (üretilir, her TASK-ID ayrı bölüm) |
 | `docs/IDEA_TASKS.md` | fikirler (üretilir, her IDEA-ID ayrı bölüm) |
-| `docs/COMPLETED_TASKS.md` | biten her görev için tek satır |
+| `docs/COMPLETED_TASKS.md` | biten her görev için tek satır: tek cümle sonuç, ajanları |
 | `.claude/session-guard2/store.json` | görev kaydı; projeyle birlikte commitlenir |
 
 ## 9. Bilgisayar ve bulut
@@ -202,7 +213,7 @@ bıraktığı boş satırlar ve boş maddeler silinir.
 ## 13. Komutlar
 Kullanıcı: `start long mode`, `finish session`, `continue installation` (mesajın başında, ardından virgül ya da
 nokta; ya da sonunda). Claude `sg task …`, `sg idea …`, `sg rules check|reviewed`,
-`sg handoff children|write|publish|adopt`, `sg breaks`, `sg migrate …`, `sg install …`, `sg manifest verify` ve
+`sg handoff children|write|note|publish|adopt`, `sg breaks`, `sg migrate …`, `sg install …`, `sg manifest verify` ve
 `sg report` komutlarını kendisi kullanır. Tam liste bu dosyanın sonundadır (§16).
 
 ## 14. Sınırlar
@@ -240,7 +251,7 @@ Görevler ve fikirler
 - `sg task start <TASK-ID>` — sıradaki görev aktif olur
 - `sg task claim <TASK-ID> [--takeover "<kullanıcının sözleri>"]` — görevi devralır
 - `sg task note <TASK-ID> [--done ...] [--pending ...] [--resolved ...] [--status ...] [--text ...]` — görevi günceller
-- `sg task done <TASK-ID> [--summary ...] [--verified ...] [--force]` / `sg task cancel <TASK-ID>` — görevi kapatır
+- `sg task done <TASK-ID> --summary "<sonuç, tek cümle>" [--verified ...] [--force]` / `sg task cancel <TASK-ID> --summary "<neden>"` — görevi kapatır
 - `sg task reopen <TASK-ID> --title "..." [--relation reopens|extends]` — bağlı yeni görevle yeniden yapar ya da genişletir
 - `sg task relate <TASK-ID> --other <TASK-ID> [--relation ...]` — iki görevi bağlar
 - `sg idea add "<metin>" [--source ...] [--rule R-xxx] [--force ...]` — fikir kaydeder
@@ -249,7 +260,8 @@ Görevler ve fikirler
 Devirler
 - `sg handoff children` — devirden önce: alt oturum ajanları ve bağlı olanlara gönderilecek mesaj
 - `sg handoff write <TASK-ID> --technical "..." [--paths ...] [--no-files] [--side-branch] [--pr <bağlantı>] [--children-gone "..."]` — görevin devir notu
-- `sg handoff publish` — devirleri yayımlar (yan dallar push edilir ve doğrulanır)
+- `sg handoff note --text "..." [--project-state]` — oturumun genel devir notu (imza, tarih, kota eklenir); bütün görevleri bitince proje durumu
+- `sg handoff publish` — devirleri yayımlar (yan dallar push edilir ve doğrulanır; not yoksa reddedilir)
 - `sg handoff adopt sg/<task-id>` — işi ve devriyle bir yan dalı birleştirir
 
 Kurallar

@@ -14,7 +14,10 @@ description: Session Guard 2.0 procedures - task work, hand-off, break hand-off 
   with their yes `--takeover "<their words>"`).
 - New main task only with the user's approval: `sg task new --title "..." --approval "<their words>"`; subtask:
   `--parent <id>` (no approval). Unrelated work: `sg idea add "..."`.
-- After each step: `sg task note <id> --done "..." --pending "..."`; finished: `sg task done <id>` at once.
+- After each step: `sg task note <id> --done "..." --pending "..."`; finished: `sg task done <id> --summary
+  "<result in one plain sentence>"` at once (cancel: why). The line goes to docs/COMPLETED_TASKS.md.
+- Your last task finished: write the project state (Session Guard says so): read docs/COMPLETED_TASKS.md only, then
+  `sg handoff note --project-state --text "<where the project stands and what is left, 2-3 sentences>"`.
 - Redo or extend a finished task: `sg task reopen <id> --title "..." --relation reopens|extends --approval "..."`.
 - Never edit the task block of docs/STATUS.md or `.claude/session-guard2/`; free notes go under "## Notes".
 
@@ -30,12 +33,16 @@ Only on a Session Guard instruction or the user's request (250k is a notice only
    - Computer: the work stays in this folder; the uncommitted files are listed. A side branch only with the
      user's yes (`--side-branch`): propose it when the work is large or risky to leave uncommitted.
    A finished task needs none; an unchanged hand-off is not written again.
-3. `sg handoff publish`. Cloud / side branch: pushes each task's branch and verifies it; "NOT VERIFIED" means the
+3. ONE session note: `sg handoff note --text "<overall assessment in 2-3 sentences: what this session did, the
+   state it leaves, what the next agent should look at first>"`. Session Guard adds your signature, the date and
+   the quota readings; it stands under "Hand-off notes" in STATUS (several agents: several notes). Once every task
+   it hands over is taken and a newer note is written, it goes to the archive as one line.
+4. `sg handoff publish` (refused without the note). Cloud / side branch: pushes each task's branch and verifies it; "NOT VERIFIED" means the
    hand-off is not done (tell the user why in one line); unsaved files are refused (save them first). Computer:
    the hand-off stays in the folder.
-4. Tell the user in one line: hand-off ready (task ids, and in the cloud each side branch), continue in a new
+5. Tell the user in one line: hand-off ready (task ids, and in the cloud each side branch), continue in a new
    session. When a new session claims the task, this session is locked.
-5. 300k (normal) or 800k (long mode) hand-off: also the SESSION MEASUREMENT the instruction gives, as in "Finish
+6. 300k (normal) or 800k (long mode) hand-off: also the SESSION MEASUREMENT the instruction gives, as in "Finish
    session" step 2 ("finish session" is refused after this hand-off).
 
 ## Limits and new work
@@ -99,8 +106,10 @@ Session Guard removes empty lines and empty bullets an edit leaves behind.
 ## Taking over
 `sg task show <id>` first: the "Work:" line says where the work is. A task on a side branch this checkout lacks
 (session start lists "HAND-OFF BRANCHES"): `sg handoff adopt sg/task-...` merges its work and hand-off here
-(conflicts in your own files stop it and change nothing); then `sg task claim <id>`. Ask the user when several
-can be taken.
+(conflicts in your own files stop it and change nothing); then `sg task claim <id>`. The "Agents" line under a
+task says who handed it over and when; that session's note under "Hand-off notes" is its overall assessment.
+Session start: propose finishing work handed off first (several: recommend one, the user chooses); only with none
+waiting and new work wanted the backlog, then the ideas (design by questions, promote to the queue, start).
 
 ## Break hand-off (BREAK RULE)
 Do not run the user's command; no reading or research for it. Session Guard already stored it word for word in

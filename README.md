@@ -108,8 +108,19 @@ A 24-hour watch tells the user when a turn or a background job has been running 
 - **Safe parallel writes:** one lock per project store, a fresh read inside the lock, revision checks; direct edits
   of the store are refused, and a hand-edited task block in STATUS.md is rebuilt from the store. A session acts
   only as itself: an `sg` command with another session's id is refused.
-- **Session start:** Claude gets its ids, its tasks and the tasks it could take over; when several can be taken,
-  Claude asks the user which one.
+- **Session start:** only STATUS.md is read. First Claude proposes finishing work that was handed off and not
+  taken over yet (several: it recommends one, you choose). Only when none waits and you want new work: a queued
+  task (TASK_BACKLOG.md); queue empty: an idea (IDEA_TASKS.md), designed with you by questions, put in the queue,
+  then started. The backlog and ideas are read only then; the archive only when needed, by search.
+- **Who worked on a task:** under each task in STATUS an "Agents" line lists every session that owned it, in order,
+  with dates and "handed off" where it was handed over.
+- **Hand-off notes:** every session that hands off work writes one short general note (`sg handoff note`): its
+  signature, the date, the quota readings and its overall assessment. They stand at the bottom of STATUS, one per
+  session (several agents: several notes). When all the work a note hands over is taken and a newer note is written,
+  the old note goes to the archive as one line, so STATUS stays short in large projects.
+- **Finished tasks:** each closes with a one-sentence result (`sg task done <id> --summary "..."`); COMPLETED_TASKS.md
+  gets one line: date, id, title, result, agents. An agent whose tasks are all finished writes a "project state"
+  note from that file instead of a hand-off note.
 
 ## 7. Hand-offs that keep the work
 Each task gets its own hand-off: project, task and session ids, the session's parent and children, last
@@ -137,7 +148,7 @@ open task. Claimed hand-offs go to `STATUS_ARCHIVE.md`.
 | `docs/STATUS_ARCHIVE.md` | history, append only; never read at session start, only searched |
 | `docs/TASK_BACKLOG.md` | queued tasks (generated, one section per TASK-ID) |
 | `docs/IDEA_TASKS.md` | ideas (generated, one section per IDEA-ID) |
-| `docs/COMPLETED_TASKS.md` | one line per finished task |
+| `docs/COMPLETED_TASKS.md` | one line per finished task: result in one sentence, its agents |
 | `.claude/session-guard2/store.json` | the task store, committed with the project |
 
 ## 9. Computer and cloud
@@ -203,7 +214,7 @@ enforce (thresholds, locks, limits, ownership) holds whatever any file says.
 ## 13. Commands
 User: `start long mode`, `finish session`, `continue installation` (at the start followed by a comma or period, or
 at the end of a message). Claude uses `sg task …`, `sg idea …`, `sg rules check|reviewed`,
-`sg handoff children|write|publish|adopt`, `sg breaks`, `sg migrate …`, `sg install …`, `sg manifest verify` and
+`sg handoff children|write|note|publish|adopt`, `sg breaks`, `sg migrate …`, `sg install …`, `sg manifest verify` and
 `sg report` itself. The full list is at the end of this file (§16).
 
 ## 14. Limits
@@ -241,7 +252,7 @@ Tasks and ideas
 - `sg task start <TASK-ID>` — a queued task becomes active
 - `sg task claim <TASK-ID> [--takeover "<the user's words>"]` — take over a task
 - `sg task note <TASK-ID> [--done ...] [--pending ...] [--resolved ...] [--status ...] [--text ...]` — update a task
-- `sg task done <TASK-ID> [--summary ...] [--verified ...] [--force]` / `sg task cancel <TASK-ID>` — close a task
+- `sg task done <TASK-ID> --summary "<result, one sentence>" [--verified ...] [--force]` / `sg task cancel <TASK-ID> --summary "<why>"` — close a task
 - `sg task reopen <TASK-ID> --title "..." [--relation reopens|extends]` — redo or extend as a new linked task
 - `sg task relate <TASK-ID> --other <TASK-ID> [--relation ...]` — link two tasks
 - `sg idea add "<text>" [--source ...] [--rule R-xxx] [--force ...]` — record an idea
@@ -250,7 +261,8 @@ Tasks and ideas
 Hand-offs
 - `sg handoff children` — before a hand-off: the child session agents and the message for the bound ones
 - `sg handoff write <TASK-ID> --technical "..." [--paths ...] [--no-files] [--side-branch] [--pr <link>] [--children-gone "..."]` — write a task's hand-off
-- `sg handoff publish` — publish the hand-offs (side branches pushed and verified)
+- `sg handoff note --text "..." [--project-state]` — the session's general note (signature, date, quota added); project state when all its tasks are finished
+- `sg handoff publish` — publish the hand-offs (side branches pushed and verified; refused without the note)
 - `sg handoff adopt sg/<task-id>` — merge a side branch with its work and hand-off
 
 Rules

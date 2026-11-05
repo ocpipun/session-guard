@@ -151,8 +151,9 @@ def parent_note(data, rec):
         return ("[Session Guard 2.0] PARENT SESSION %s HANDS OFF (%s). You are a BOUND child session agent (you own "
                 "only subtasks of its work): stop the work now. Bring each task you own to a hand-off-ready point "
                 "and write its hand-off (`%s handoff write <id> --technical \"...\"`: branch and PR are recorded; add "
-                "--pr <link> if missing), then `%s handoff publish`. Do nothing else: this session is locked once "
-                "every hand-off is written. Tell the user in one line." % (par["id"], why, sg_cmd(), sg_cmd()))
+                "--pr <link> if missing), then your session note (`%s handoff note --text \"...\"`), then `%s handoff publish`. "
+                "Do nothing else: this session is locked once every hand-off is written. Tell the user in one line."
+                % (par["id"], why, sg_cmd(), sg_cmd(), sg_cmd()))
     rec["notified"].append("parent_stopped")
     return ("[Session Guard 2.0] PARENT SESSION %s HANDS OFF / STOPPED (%s). You are an INDEPENDENT child session "
             "agent (your own main task): you go on under the same rules; its reports no longer reach it. Keep your "
@@ -218,18 +219,27 @@ def lock_text(rec, data=None):
 
 
 def task_lines(data, sid):
+    """Session start order (user decision 2026-11-05): STATUS only; first the work handed off and not taken over yet
+    (propose finishing one); only when there is none and new work is wanted the backlog, then the ideas."""
     mine = store.owned_open(data, sid)
     out = ["Your tasks: " + (", ".join("%s (%s)" % (t["id"], t["status"]) for t in mine) or "none")]
-    can = store.claimable(data, sid)
+    can = sorted(store.claimable(data, sid), key=lambda t: (t["kind"] != "urgent", t["priority"], store.sort_key(t["id"])))
     if len(can) > 1:
-        out.append("SEVERAL TASKS CAN BE TAKEN OVER (%s). Do not choose one yourself: ask the user which to continue "
-                   "(read each with `sg task show <id>`)." % ", ".join(
-                       "%s%s" % (t["id"], " hand-off" if t["handoff"] else " orphaned/free") for t in can))
+        out.append("SEVERAL TASKS CAN BE TAKEN OVER (%s). Unless the user's message is about one of them, propose "
+                   "first to finish one of these (recommend %s: urgent and higher priority first; read it with `sg task "
+                   "show <id>`); the user chooses, do not claim before that." % (", ".join(
+                       "%s%s" % (t["id"], " hand-off" if t["handoff"] else " orphaned/free") for t in can), can[0]["id"]))
     elif can:
         t = can[0]
         out.append("One task can be taken over: %s \"%s\"%s. If the user's message is about it, read it (`sg task show "
-                   "%s`) and claim it; otherwise ask." % (t["id"], t["title"], " (hand-off waiting)" if t["handoff"]
-                                                          else "", t["id"]))
+                   "%s`) and claim it; otherwise propose first to finish it, and ask." % (
+                       t["id"], t["title"], " (hand-off waiting)" if t["handoff"] else "", t["id"]))
+    elif not mine:
+        out.append("No task waits to be taken over. New work only when the user wants it, in this order: a queued "
+                   "task (docs/TASK_BACKLOG.md, %d queued; `sg task start <id>`), else an idea (docs/IDEA_TASKS.md, %d): "
+                   "design it with the user by questions, put it in the queue (`sg idea promote <id> --queue "
+                   "--approval \"...\"`), then start it. Read those files only then; STATUS is enough otherwise." % (
+                       store.queue_count(data), store.idea_count(data)))
     return out
 
 
@@ -588,10 +598,11 @@ def handoff_todo(data, sid):
         return first + "you own no open task: no hand-off needed"
     return first + ("tasks you own: %s; hand-off still missing for: %s. First bring each task's work to a hand-off-ready "
             "point (finish the small step in progress, leave nothing half-written), then `%s handoff write <id> "
-            "--technical ...`%s, then `%s handoff publish`" % (
+            "--technical ...`%s, then ONE session note (`%s handoff note --text \"<overall assessment, 2-3 sentences>\"`: "
+            "signature, date and quota are added), then `%s handoff publish`" % (
                 ", ".join(mine), ", ".join(missing) or "none", sg_cmd(),
                 " (cloud: it commits the task's work for its side branch; with several tasks add --paths)"
-                if core.in_cloud() else "", sg_cmd()))
+                if core.in_cloud() else "", sg_cmd(), sg_cmd()))
 
 
 def restore_status(root):
@@ -895,6 +906,7 @@ def on_stop(inp):
                     "<files>`" % (", ".join(unsaved[:8]), sg_cmd()))
     if missing:
         todo.append("write the hand-off for %s (`%s handoff write <id> --technical ...`)" % (", ".join(missing), sg_cmd()))
+    todo.append("write your session note (`%s handoff note --text \"...\"`)" % sg_cmd())
     todo.append("publish the hand-offs (`%s handoff publish`)" % sg_cmd())
     return emit({"decision": "block", "reason": "Session Guard 2.0: before the session closes, %s." % "; then ".join(
         todo)})

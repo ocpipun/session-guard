@@ -201,7 +201,7 @@ class Tasks(Base):
         self.t("new", "--title", "another agent's work", "--approval", "ok", sid=S2, ok=True)    # it goes on
         self.t("new", "--title", "check the logs", "--parent", "TASK-003", ok=True)   # the urgent work goes on
         for tid in ("TASK-003-1", "TASK-003", "TASK-004", "TASK-005"):
-            self.t("done", tid, ok=True)
+            self.t("done", tid, "--summary", "finished", ok=True)
         self.t("new", "--title", "D", "--approval", "ok", ok=True)
 
     def test_subagent_gets_only_a_subtask_of_an_owned_task(self):
@@ -310,7 +310,7 @@ class Tasks(Base):
         self.t("new", "--title", "write the user guide", "--approval", "ok", ok=True)            # TASK-002 running
         self.t("new", "--title", "add a dark theme", "--queue", "--approval", "ok", ok=True)     # TASK-003 queued
         self.t("new", "--title", "export reports as csv", "--approval", "ok", ok=True)           # TASK-004
-        self.t("done", "TASK-004", ok=True)
+        self.t("done", "TASK-004", "--summary", "finished", ok=True)
         with open(os.path.join(self.root, "docs", "COMPLETED_TASKS.md"), "a", encoding="utf-8") as fh:
             fh.write("- 2026-11-01 [SESSION-GUARD: 2.0] PRJ-x PRE20-DONE-001 · login sayfası düzeltildi · done "
                      "before Session Guard 2.0\n")
@@ -374,15 +374,15 @@ class Tasks(Base):
     def test_subtask_done_keeps_parent_open(self):
         self.t("new", "--title", "A", "--approval", "ok", ok=True)
         self.t("new", "--title", "a1", "--parent", "TASK-002", ok=True)
-        self.assertIn("open subtasks", self.t("done", "TASK-002", ok=False))
-        self.t("done", "TASK-002-1", ok=True)
+        self.assertIn("open subtasks", self.t("done", "TASK-002", "--summary", "finished", ok=False))
+        self.t("done", "TASK-002-1", "--summary", "finished", ok=True)
         self.assertEqual(self.store(self.root)["tasks"]["TASK-002"]["status"], "open")
-        self.t("done", "TASK-002", ok=True)
+        self.t("done", "TASK-002", "--summary", "finished", ok=True)
         self.assertIn("TASK-002 · A · done", self.text(self.root, "docs", "COMPLETED_TASKS.md"))
 
     def test_finished_task_reopened_gets_new_id(self):
         self.t("new", "--title", "A", "--approval", "ok", ok=True)
-        self.t("done", "TASK-002", ok=True)
+        self.t("done", "TASK-002", "--summary", "finished", ok=True)
         self.assertIn("reopen", self.t("claim", "TASK-002", ok=False))
         self.assertIn("TASK-003", self.t("reopen", "TASK-002", "--title", "A again", "--approval", "ok", ok=True))
         data = self.store(self.root)
@@ -405,6 +405,8 @@ class Tasks(Base):
         self.assertIn("prepared", w())
         self.assertIn("unchanged", w())
         self.assertIn("Hand-offs waiting (1)", self.text(self.root, "docs", "STATUS.md"))
+        self.assertIn("session note first", self.sg("handoff", "publish", "--session", a, "--root", self.root, ok=False))
+        self.sg("handoff", "note", "--text", "A half done.", "--session", a, "--root", self.root, ok=True)
         self.sg("handoff", "publish", "--session", a, "--root", self.root, ok=True)  # no git: kept locally
         out, b = self.start("hb", self.root)
         self.assertIn("One task can be taken over: TASK-002", self.ctx(out))
@@ -426,9 +428,54 @@ class Tasks(Base):
         self.assertIn("SEVERAL TASKS CAN BE TAKEN OVER", self.ctx(out))
         self.assertIn("ORPHANED", self.text(self.root, "docs", "STATUS.md"))
 
+    def test_session_notes_agents_line_and_outdated_note_to_archive(self):
+        status = lambda: self.text(self.root, "docs", "STATUS.md")
+        arg = lambda sid: ("--session", sid, "--root", self.root)
+        _, a = self.start("na", self.root)
+        self.sg("task", "new", "--title", "A", "--approval", "ok", *arg(a), ok=True)               # TASK-002
+        self.sg("handoff", "write", "TASK-002", "--technical", "x", *arg(a), ok=True)
+        self.sg("handoff", "note", "--text", "Note of A.", *arg(a), ok=True)
+        self.sg("handoff", "publish", *arg(a), ok=True)
+        _, c = self.start("nc", self.root)                                                        # a parallel agent
+        self.sg("task", "new", "--title", "C", "--approval", "ok", *arg(c), ok=True)               # TASK-003
+        self.sg("handoff", "write", "TASK-003", "--technical", "y", *arg(c), ok=True)
+        self.sg("handoff", "note", "--text", "Note of C.", *arg(c), ok=True)
+        self.assertIn("## Hand-off notes (2)", status())
+        self.assertRegex(status(), r"- %s · \d{4}-\d\d-\d\d · tasks TASK-002 waiting · quota n/a: Note of A\." % a)
+        out, b = self.start("nb", self.root)
+        self.assertIn("propose first to finish one of these (recommend TASK-002", self.ctx(out))
+        self.sg("task", "claim", "TASK-002", *arg(b), ok=True)
+        self.assertRegex(status(), r"- Agents \(2\): %s \d\d-\d\d→\d\d-\d\d handed off · %s \d\d-\d\d→now" % (a, b))
+        self.assertIn("tasks TASK-002 taken by %s" % b, status())                # kept until a newer note exists
+        self.sg("handoff", "write", "TASK-002", "--technical", "z", *arg(b), ok=True)
+        self.sg("handoff", "note", "--text", "Note of B.", *arg(b), ok=True)
+        self.assertIn("## Hand-off notes (2)", status())                        # C's work still waits: C's note stays
+        self.assertNotIn("Note of A.", status())
+        self.assertIn("Note of C.", status())
+        arch = self.text(self.root, "docs", "STATUS_ARCHIVE.md")
+        self.assertIn("Hand-off note of %s (outdated by %s's note)" % (a, b), arch)
+        self.assertIn("Note of A.", arch)
+        self.assertIn("no hand-off of yours", self.sg("handoff", "note", "--text", "x", *arg(S2), ok=False))
+
+    def test_completed_task_result_project_state_and_start_order(self):
+        self.t("new", "--title", "A", "--approval", "ok", ok=True)
+        self.assertIn("--summary", self.t("done", "TASK-002", ok=False))
+        self.assertIn("project state note is for", self.sg("handoff", "note", "--project-state", "--text", "x",
+                                                           "--session", S1, "--root", self.root, ok=False))
+        out = self.t("done", "TASK-002", "--summary", "A works for every user.", ok=True)
+        self.assertIn("ALL YOUR TASKS ARE FINISHED", out)
+        self.assertIn("TASK-002 · A · done · result: A works for every user. · agents %s" % S1,
+                      self.text(self.root, "docs", "COMPLETED_TASKS.md"))
+        self.sg("handoff", "note", "--project-state", "--text", "A is finished; nothing is left.", "--session", S1,
+                "--root", self.root, ok=True)
+        self.assertIn("- PROJECT STATE by %s" % S1, self.text(self.root, "docs", "STATUS.md"))
+        out, _ = self.start("ns", self.root)
+        self.assertIn("No task waits to be taken over", self.ctx(out))
+        self.assertIn("docs/TASK_BACKLOG.md, 0 queued", self.ctx(out))
+
     def test_finished_task_needs_no_handoff(self):
         self.t("new", "--title", "A", "--approval", "ok", ok=True)
-        self.t("done", "TASK-002", ok=True)
+        self.t("done", "TASK-002", "--summary", "finished", ok=True)
         self.assertIn("needs no hand-off", self.sg("handoff", "write", "TASK-002", "--technical", "x", "--session", S1,
                                                    "--root", self.root, ok=False))
 
@@ -741,6 +788,7 @@ class Work(Base):
         out = self.sg("handoff", "write", "TASK-002", "--technical", "x", "--session", S1, "--root", root, ok=True)
         self.assertIn("work: this folder (1 uncommitted", out)
         self.assertIn("uncommitted: app.py", self.sg("task", "show", "TASK-002", "--root", root))
+        self.sg("handoff", "note", "--text", "n", "--session", S1, "--root", root, ok=True)
         self.assertIn("kept in this folder", self.sg("handoff", "publish", "--session", S1, "--root", root, ok=True))
         self.assertEqual(self.git(bare, "branch", "--list", "sg/*"), "")       # no side branch, no push
         self.assertIn("app.py", self.git(root, "status", "--porcelain"))        # the work is not committed
@@ -751,6 +799,7 @@ class Work(Base):
         self.write(root, "app.py", "print(2)\n")
         self.sg("handoff", "write", "TASK-002", "--technical", "x", "--side-branch", "--session", S1, "--root", root,
                 ok=True)
+        self.sg("handoff", "note", "--text", "n", "--session", S1, "--root", root, ok=True)
         self.assertIn("VERIFIED", self.sg("handoff", "publish", "--session", S1, "--root", root, ok=True))
         self.assertEqual(self.git(bare, "show", "sg/task-002:app.py"), "print(2)")
 
@@ -761,6 +810,7 @@ class Work(Base):
         self.write(root, "feature.py", "x = 1\n")
         out = self.c(root, "handoff", "write", "TASK-002", "--technical", "run app.py", "--pending", "tests", ok=True)
         self.assertIn("side branch sg/task-002", out)
+        self.c(root, "handoff", "note", "--text", "n", ok=True)
         out = self.c(root, "handoff", "publish", ok=True)
         self.assertIn("TASK-002 → sg/task-002: push VERIFIED", out)
         self.assertEqual(self.git(bare, "show", "sg/task-002:feature.py"), "x = 1")
@@ -795,8 +845,11 @@ class Work(Base):
         self.write(root, "b.py", "b\n")
         self.assertIn("--paths", self.c(root, "handoff", "write", "TASK-002", "--technical", "x", ok=False))
         self.c(root, "handoff", "write", "TASK-002", "--technical", "x", "--paths", "a.py", ok=True)
+        self.c(root, "handoff", "note", "--text", "n", ok=True)
         self.assertIn("b.py", self.c(root, "handoff", "publish", ok=False))     # b.py would be lost
         self.c(root, "handoff", "write", "TASK-003", "--technical", "y", "--paths", "b.py", ok=True)
+        self.assertIn("must list TASK-003", self.c(root, "handoff", "publish", ok=False))
+        self.c(root, "handoff", "note", "--text", "n", ok=True)
         out = self.c(root, "handoff", "publish", ok=True)
         self.assertIn("sg/task-002: push VERIFIED", out)
         self.assertIn("sg/task-003: push VERIFIED", out)
