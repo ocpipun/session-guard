@@ -9,6 +9,7 @@ Session Guard's commits too.
 import os
 import re
 import subprocess
+import tempfile
 
 SG_PATHS = (".claude/session-guard2", "docs/STATUS.md", "docs/STATUS_ARCHIVE.md", "docs/TASK_BACKLOG.md",
             "docs/IDEA_TASKS.md", "docs/COMPLETED_TASKS.md", "CLAUDE.md", ".claude/settings.json")
@@ -225,3 +226,87 @@ def pr_url(root):
         return None
     out = r.stdout.decode("utf-8", "replace").strip()
     return out if r.returncode == 0 and out.startswith("http") else None
+
+
+# --- session records in the cloud (user decision 2026-11-05) ---------------------------------------------------
+# A cloud VM can be rebuilt with a fresh home folder, which holds Session Guard's session records (mode, locks,
+# notices, message ids). In the cloud they are kept on the remote branch sg-state as well: written by plumbing
+# commands into a temporary index (the work tree, the index and the current branch are never touched), pushed
+# without force, retried when another session pushed first. Session start in the cloud reads them back.
+STATE_BRANCH = "sg-state"
+STATE_REF = "refs/sg/state"
+STATE_AUTHOR = {"GIT_AUTHOR_NAME": "Session Guard", "GIT_AUTHOR_EMAIL": "session-guard@localhost",
+                "GIT_COMMITTER_NAME": "Session Guard", "GIT_COMMITTER_EMAIL": "session-guard@localhost"}
+
+
+def _run(root, args, env=None, data=None, timeout=30):
+    try:
+        r = subprocess.run(["git", "-C", root] + list(args), capture_output=True, timeout=timeout, input=data,
+                           env=dict(os.environ, **QUIET, **(env or {})))
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, "", str(e)
+    return r.returncode, r.stdout.decode("utf-8", "replace").strip(), r.stderr.decode("utf-8", "replace").strip()
+
+
+def fetch_state(root, timeout=6):
+    """The remote sg-state branch into STATE_REF; False when it does not exist or cannot be reached."""
+    rem = remote(root)
+    if not rem:
+        return False
+    rc, _, _ = _run(root, ["fetch", "-q", "--no-tags", rem, "+refs/heads/%s:%s" % (STATE_BRANCH, STATE_REF)],
+                    timeout=timeout)
+    return rc == 0
+
+
+def read_state(root, folder="sessions"):
+    """{file name: text} under folder/ of the fetched sg-state branch."""
+    rc, out, _ = _run(root, ["ls-tree", "--name-only", "%s:%s" % (STATE_REF, folder)])
+    found = {}
+    for name in out.splitlines() if rc == 0 else []:
+        rc2, text, _ = _run(root, ["show", "%s:%s/%s" % (STATE_REF, folder, name)])
+        if rc2 == 0:
+            found[name] = text
+    return found
+
+
+def write_state(root, files, message, tries=3):
+    """Adds or replaces files ({path: text}) on the remote sg-state branch. Returns {"verified", "commit", "why"}."""
+    rem = remote(root)
+    if not rem:
+        return {"verified": False, "why": "no remote"}
+    why = None
+    for _ in range(tries):
+        parent = None
+        if fetch_state(root, timeout=20):
+            rc, out, _ = _run(root, ["rev-parse", "--verify", "-q", STATE_REF])
+            parent = out if rc == 0 and out else None
+        fd, index = tempfile.mkstemp(prefix="sg-state-index-")
+        os.close(fd)
+        os.remove(index)
+        env = dict(STATE_AUTHOR, GIT_INDEX_FILE=index)
+        try:
+            if parent and _run(root, ["read-tree", parent], env=env)[0]:
+                why = "read-tree failed"
+                continue
+            for path, text in sorted(files.items()):
+                rc, sha, err = _run(root, ["hash-object", "-w", "--stdin"], env=env, data=text.encode("utf-8"))
+                if rc or _run(root, ["update-index", "--add", "--cacheinfo", "100644,%s,%s" % (sha, path)],
+                              env=env)[0]:
+                    return {"verified": False, "why": "cannot store %s: %s" % (path, err)}
+            rc, tree, err = _run(root, ["write-tree"], env=env)
+            if rc:
+                return {"verified": False, "why": "write-tree: " + err}
+            rc, commit, err = _run(root, ["commit-tree", tree, "-m", message] + (["-p", parent] if parent else []),
+                                   env=env)
+            if rc:
+                return {"verified": False, "why": "commit-tree: " + err}
+            rc, _, err = _run(root, ["push", "-q", rem, "%s:refs/heads/%s" % (commit, STATE_BRANCH)], timeout=60)
+            if rc == 0:
+                rc, out, _ = _run(root, ["ls-remote", rem, "refs/heads/" + STATE_BRANCH])
+                ok = rc == 0 and out.split()[:1] == [commit]
+                return {"verified": ok, "commit": commit, "why": None if ok else "remote shows %s" % out[:12]}
+            why = "push refused: " + ((err.splitlines() or ["?"])[-1])  # another session pushed first: again
+        finally:
+            if os.path.exists(index):
+                os.remove(index)
+    return {"verified": False, "why": why}

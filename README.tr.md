@@ -123,6 +123,8 @@ Kilitli oturuma mesaj ulaşmaz; kullanıcıya nedeni söylenir. Türleri:
 - **Aynı konuşma, yeni kimlik:** Claude Code'un oturum kimliği değişebilir (masaüstü uygulamasının konuşmayı yeni
   kimliğe kopyaladığı görüldü; bulut makinesi yeniden kurulabilir). Session Guard konuşmayı mesaj kimliklerinden,
   hem bu bilgisayarda hem projenin kendi kaydında yeniden bulur; SESSION-ID, görevler, uzun mod ve kilitler korunur.
+  Bulutta bu kayıtlar GitHub'da `sg-state` dalında da tutulur (Session Guard'ın kendi dalı: çalışma dalınıza ondan
+  commit gelmez); böylece yeniden kurulan bulut makinesi onları yeniden bulur.
 - **Oturum başı:** yalnız STATUS.md okunur. Claude önce devredilmiş ama henüz alınmamış işi bitirmeyi önerir
   (birden fazlaysa birini önerir, sen seçersin). Bekleyen iş yoksa ve yeni iş istersen: sıradaki görev
   (TASK_BACKLOG.md); sıra boşsa bir fikir (IDEA_TASKS.md), seninle sorularla tasarlanır, sıraya konur, sonra
@@ -272,6 +274,7 @@ Devirler
 - `sg handoff children` — devirden önce: alt oturum ajanları ve bağlı olanlara gönderilecek mesaj
 - `sg handoff write <TASK-ID> --technical "..." [--paths ...] [--no-files] [--side-branch] [--pr <bağlantı>] [--children-gone "..."]` — görevin devir notu
 - `sg handoff note --text "..." [--project-state]` — oturumun genel devir notu (imza, tarih, kota eklenir); bütün görevleri bitince proje durumu
+- `sg state-push --root <klasör> --claude-id <kimlik>` — yalnız bulut, hook'lar arka planda çalıştırır: oturum kaydını `sg-state` dalına yazar
 - `sg handoff publish` — devirleri yayımlar (yan dallar push edilir ve doğrulanır; not yoksa reddedilir)
 - `sg handoff adopt sg/<task-id>` — işi ve devriyle bir yan dalı birleştirir
 

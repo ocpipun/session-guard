@@ -658,9 +658,26 @@ def parser():
     r = sub.add_parser("report")
     r.add_argument("path", nargs="?")
 
+    s = sub.add_parser("state-push")
+    s.add_argument("--root", required=True)
+    s.add_argument("--claude-id", required=True)
+
     v = sub.add_parser("breaks")
     v.add_argument("action", choices=["on", "off", "show"])
     return p
+
+
+def cmd_state_push(a):
+    """Cloud: this session's record to the remote branch sg-state (run in the background by the hooks)."""
+    from . import sessions
+    rec = core.read_json(sessions.path_for(a.claude_id))
+    if not isinstance(rec, dict):
+        raise store.Refused("no session record for " + a.claude_id)
+    text = json.dumps(rec, ensure_ascii=False, indent=1) + "\n"
+    message = "Session Guard 2.0: session record %s (%s)\n\nSESSION-GUARD: 2.0" % (rec.get("sg_id"), a.claude_id)
+    r = gitops.write_state(a.root, {"sessions/%s.json" % core.safe_name(a.claude_id): text}, message)
+    out("sg-state: %s" % ("VERIFIED " + r["commit"][:12] if r.get("verified") else "NOT VERIFIED (%s)" % r.get("why")))
+    return 0 if r.get("verified") else 1
 
 
 def cmd_breaks(a):
@@ -706,6 +723,8 @@ def run(argv):
             return cmd_rules(a)
         if a.cmd == "handoff":
             return cmd_handoff(a)
+        if a.cmd == "state-push":
+            return cmd_state_push(a)
         if a.cmd == "migrate":
             return cmd_migrate(a)
         if a.cmd == "install":

@@ -902,6 +902,51 @@ class Work(Base):
         with open(os.path.join(root, rel), "w") as fh:
             fh.write(text)
 
+    def cloud_conversation(self, name, ids, context):
+        p = os.path.join(self.home, name + ".jsonl")
+        with open(p, "w", encoding="utf-8") as fh:
+            for i, mid in enumerate(ids):
+                fh.write(json.dumps({"type": "assistant", "timestamp": stamp(30 - i), "message": {
+                    "id": mid, "usage": {"input_tokens": 2, "cache_creation_input_tokens": 1000,
+                                         "cache_read_input_tokens": (context if i == len(ids) - 1 else 2000) - 1002,
+                                         "output_tokens": 5}}}) + "\n")
+        return p
+
+    def cloud_hook(self, root, event, cid, transcript, **extra):
+        data = dict({"hook_event_name": event, "session_id": cid, "transcript_path": transcript, "cwd": root,
+                     "source": "startup", "prompt": ""}, **extra)
+        r = subprocess.run([sys.executable, "-I", SCRIPT, "--project"], input=json.dumps(data).encode(),
+                           capture_output=True, env=dict(self.cloud(root), SESSION_GUARD_SYNC_BACKUP="1"))
+        out = r.stdout.decode()
+        return json.loads(out) if out else {}
+
+    def test_cloud_records_kept_on_sg_state_and_found_on_a_rebuilt_vm(self):
+        root, bare = self.repo("st", "cloud")
+        main_before = self.git(bare, "rev-parse", "main")
+        tr = self.cloud_conversation("st1", ["msg_c1", "msg_c2", "msg_c3"], 5000)
+        out = self.cloud_hook(root, "SessionStart", "c1", tr)
+        a = json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions", "c1.json")))["sg_id"]
+        self.cloud_hook(root, "UserPromptSubmit", "c1", tr, prompt="start long mode")
+        kept = json.loads(self.git(bare, "show", "sg-state:sessions/c1.json"))
+        self.assertEqual((kept["sg_id"], kept["long"]), (a, True))
+        self.assertEqual(self.git(bare, "rev-parse", "main"), main_before)     # the work branch is never touched
+        self.assertEqual(self.git(root, "status", "--porcelain", "--", "app.py"), "")
+        other = self.cloud_conversation("st2", ["msg_o1"], 3000)               # a second session, same branch
+        self.cloud_hook(root, "SessionStart", "c2", other)
+        self.cloud_hook(root, "UserPromptSubmit", "c2", other, prompt="start long mode")
+        self.assertIn("c1.json", self.git(bare, "ls-tree", "--name-only", "sg-state:sessions"))
+        self.assertIn("c2.json", self.git(bare, "ls-tree", "--name-only", "sg-state:sessions"))
+        # the VM is rebuilt: a fresh home folder and a fresh clone; the conversation comes back at 450k
+        shutil.rmtree(os.path.join(self.home, ".claude", "session_guard_v2", "sessions"))
+        root2 = os.path.join(self.home, "work", "st-new")
+        subprocess.run(["git", "clone", "-q", bare, root2], check=True)
+        later = self.cloud_conversation("st3", ["msg_c1", "msg_c2", "msg_c3", "msg_c4"], 450000)
+        self.cloud_hook(root2, "SessionStart", "c1-new", later, source="resume")
+        rec = json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions", "c1-new.json")))
+        self.assertEqual((rec["sg_id"], rec["long"]), (a, True))               # found from its messages
+        out = self.cloud_hook(root2, "UserPromptSubmit", "c1-new", later, prompt="go on")
+        self.assertNotIn("decision", out)                                      # long mode kept: no 400k stop
+
     def test_computer_keeps_work_in_the_folder(self):
         root, bare = self.repo("pc", "computer")
         self.sg("task", "new", "--title", "A", "--approval", "ok", "--session", S1, "--root", root, ok=True)

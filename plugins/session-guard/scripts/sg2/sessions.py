@@ -16,7 +16,10 @@ Lock types (each stored on its own; clearing one never clears another):
 A session with no record at all (it started before this install or update) is blocked as "restart" (v1.4).
 """
 import glob
+import json
 import os
+import subprocess
+import sys
 import time
 
 from . import core
@@ -40,7 +43,8 @@ def blank(claude_id):
             "born": None, "long": False, "locks": {}, "notified": [], "ids": [], "asked_at": 0, "stop_blocks": 0,
             "break_probe": None, "place": core.place(), "first_ids": [], "unlinked": 0, "source": None,
             "env_file": None, "saved_at": 0, "id_saved": False,
-            "last_context": None, "last_reply": None, "break_wake": 0}
+            "last_context": None, "last_reply": None, "break_wake": 0,
+            "backup_sig": None}
 
 
 def fix(rec, claude_id):
@@ -95,6 +99,57 @@ def save(rec, ids=(), first=()):
         rec["first_ids"] = list(first)[:KEEP_IDS]
     rec["saved_at"] = time.time()
     core.write_json(path_for(rec["claude_id"]), rec)
+    if core.in_cloud():
+        backup(rec)
+
+
+ENTRY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "session_guard.py")
+
+
+def backup(rec):
+    """Cloud: when what matters changed (SESSION-ID, mode, locks, notices, first message ids), the record goes to
+    the remote branch sg-state in the background (`sg state-push`), so a rebuilt VM finds it again."""
+    root = rec.get("root")
+    if not root or not rec.get("sg_id"):
+        return
+    sig = json.dumps([rec["sg_id"], rec.get("long"), sorted(rec.get("locks") or {}), sorted(rec.get("notified") or []),
+                      rec.get("first_ids") or []])
+    if rec.get("backup_sig") == sig:
+        return
+    rec["backup_sig"] = sig
+    core.write_json(path_for(rec["claude_id"]), rec)
+    cmd = [sys.executable, "-I", ENTRY, "state-push", "--root", root, "--claude-id", rec["claude_id"]]
+    try:
+        if os.environ.get("SESSION_GUARD_SYNC_BACKUP"):  # tests
+            subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+        else:
+            subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def restore(root):
+    """Cloud session start: records kept on sg-state that this machine lacks are written back (never over a
+    newer local one), so the usual lookup by Claude Code id and message ids finds them."""
+    from . import gitops
+    if not gitops.fetch_state(root, timeout=5):
+        return 0
+    n = 0
+    for name, text in gitops.read_state(root).items():
+        try:
+            rec = json.loads(text)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or not rec.get("claude_id"):
+            continue
+        p = path_for(rec["claude_id"])
+        mine = core.read_json(p)
+        if isinstance(mine, dict) and (mine.get("saved_at") or 0) >= (rec.get("saved_at") or 0):
+            continue
+        core.write_json(p, rec)
+        n += 1
+    return n
 
 
 def lock(rec, kind, reason, **extra):

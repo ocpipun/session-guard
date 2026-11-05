@@ -119,6 +119,8 @@ A 24-hour watch tells the user when a turn or a background job has been running 
 - **Same conversation, new id:** Claude Code's session id can change (the desktop app was seen copying a
   conversation to a new id; a cloud VM can be rebuilt). Session Guard finds the conversation again from its message
   ids, on this machine and in the project's own records, and keeps its SESSION-ID, tasks, long mode and locks.
+  In the cloud its records are also kept on the GitHub branch `sg-state` (Session Guard's own branch: your work
+  branch gets no commit from it), so a rebuilt cloud VM finds them again.
 - **Session start:** only STATUS.md is read. First Claude proposes finishing work that was handed off and not
   taken over yet (several: it recommends one, you choose). Only when none waits and you want new work: a queued
   task (TASK_BACKLOG.md); queue empty: an idea (IDEA_TASKS.md), designed with you by questions, put in the queue,
@@ -273,6 +275,7 @@ Hand-offs
 - `sg handoff children` — before a hand-off: the child session agents and the message for the bound ones
 - `sg handoff write <TASK-ID> --technical "..." [--paths ...] [--no-files] [--side-branch] [--pr <link>] [--children-gone "..."]` — write a task's hand-off
 - `sg handoff note --text "..." [--project-state]` — the session's general note (signature, date, quota added); project state when all its tasks are finished
+- `sg state-push --root <dir> --claude-id <id>` — cloud only, run by the hooks in the background: the session record to the `sg-state` branch
 - `sg handoff publish` — publish the hand-offs (side branches pushed and verified; refused without the note)
 - `sg handoff adopt sg/<task-id>` — merge a side branch with its work and hand-off
 

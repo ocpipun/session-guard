@@ -413,6 +413,8 @@ def on_session_start(inp):
     if act != "active":
         return emit(inactive(act, "SessionStart"))
     reading = measure.read_transcript(inp.get("transcript_path"))
+    if core.in_cloud() and root and gitops.is_repo(root) and not os.path.exists(sessions.path_for(cid)):
+        sessions.restore(root)  # a rebuilt VM: the records kept on the sg-state branch come back first
     rec, known = sessions.load(cid, reading.ids + reading.first_ids)
     forked_from = None
     if known and source == "fork" and rec.get("continues") and rec["continues"] != cid:

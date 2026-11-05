@@ -29,7 +29,11 @@ start per project only after its migration is verified.
   30 minutes and looks again on every prompt and tool call once the transcript shows older history, matching only a
   session born earlier (a later one is a copy, handled as a fork). The project store keeps each session's first
   message ids and long mode, so a session is found again on another machine (cloud VM rebuilt, ~/.claude lost);
-  the id made meanwhile becomes an alias (`renamed_to`). Parent/child: a session that claims a
+  the id made meanwhile becomes an alias (`renamed_to`). Cloud (user decision 2026-11-05): the machine records also
+  go to the remote branch `sg-state` (`sessions/<claude id>.json`) when the SESSION-ID, mode, locks, notices or
+  first message ids change: `sg state-push` in the background, plumbing commit into a temporary index (work tree,
+  index and current branch untouched), push without force, retried after a race. A cloud session start without a
+  local record fetches it and writes back the records this machine lacks. Parent/child: a session that claims a
   hand-off becomes the child of its source; other sessions stay independent (no forced chains).
 - TASK-ID `TASK-001`, `TASK-001-1`, `TASK-001-2-1`. Counters only grow; ids are never reused. Old 1.x session
   ids are listed in `legacy_sessions` only.
