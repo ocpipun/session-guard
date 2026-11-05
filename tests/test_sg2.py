@@ -539,6 +539,76 @@ class Guard(Base):
         out = self.hook("UserPromptSubmit", "fa", self.transcript("fk", 255000), cwd=root, prompt="go")
         self.assertIn("NOTICE (250k", self.ctx(out))               # the notice fires again after compaction
 
+    def conversation(self, name, n, context, minutes_ago=30, head=()):
+        """A transcript with n assistant replies (ids msg_conv_<i>), the last one at the given context size; head:
+        entries written first, as the desktop app does when it copies a conversation to a new id."""
+        p = os.path.join(self.home, name + ".jsonl")
+        with open(p, "w", encoding="utf-8") as fh:
+            for e in head:
+                fh.write(json.dumps(e) + "\n")
+            for i in range(n):
+                size = context if i == n - 1 else 1000 + i
+                fh.write(json.dumps({"type": "assistant", "timestamp": stamp(minutes_ago - i * 0.1), "message": {
+                    "id": "msg_conv_%d" % i, "usage": {"input_tokens": 2, "cache_creation_input_tokens": 1000,
+                                                       "cache_read_input_tokens": size - 1002, "output_tokens": 5}}})
+                         + "\n")
+        return p
+
+    def test_copied_conversation_found_from_its_messages_after_the_first_hook(self):
+        """Seen 2026-11-05: the desktop app copied a long-mode conversation to a new id; the first hook ran before the
+        copy was written, a new record was made, and 400k (normal mode) stopped it. Now the record keeps looking."""
+        root = self.migrated("cp")
+        tr = self.conversation("orig", 5, 200000)
+        _, a = self.start("orig", root, tr)
+        self.hook("UserPromptSubmit", "orig", tr, cwd=root, prompt="start long mode")
+        self.sg("task", "new", "--title", "A", "--approval", "ok", "--session", a, "--root", root, ok=True)
+        unfinished = os.path.join(self.home, "copy.jsonl")
+        with open(unfinished, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "queue-operation", "timestamp": stamp(0)}) + "\n")
+        _, fresh = self.start("copy", root, unfinished)
+        self.assertNotEqual(fresh, a)                             # nothing to match yet
+        copied = self.conversation("copy", 8, 413000, head=[{"type": "custom-title"}])
+        out = self.hook("PostToolUse", "copy", copied, cwd=root, tool_name="Bash")
+        self.assertIn("SAME CONVERSATION", self.ctx(out))
+        self.assertIn("SESSION-ID is %s again (mode LONG" % a, self.ctx(out))
+        self.assertNotIn("continue", out)                         # not stopped at 413k: long mode kept
+        out = self.hook("UserPromptSubmit", "copy", copied, cwd=root, prompt="go on")
+        self.assertNotIn("decision", out)
+        self.assertIn("Mode: LONG", self.ctx(out))
+        data = self.store(root)
+        self.assertEqual(data["sessions"][fresh]["renamed_to"], a)   # the id made meanwhile is an alias
+        self.assertIn("copy", data["sessions"][a]["claude_ids"])
+        self.assertEqual(data["tasks"]["TASK-002"]["owner"], a)
+        self.sg("task", "note", "TASK-002", "--done", "x", "--session", fresh, "--root", root, ok=True)  # alias works
+
+    def test_session_found_from_the_project_store_on_another_machine(self):
+        """A cloud VM rebuilt, or ~/.claude lost: no machine record, but the project's store knows the conversation's
+        first message ids and its long mode."""
+        root = self.migrated("vm")
+        tr = self.conversation("v1", 3, 5000)
+        _, a = self.start("v1", root, tr)
+        self.hook("UserPromptSubmit", "v1", tr, cwd=root, prompt="start long mode")
+        self.assertEqual(self.store(root)["sessions"][a]["first_ids"][:1], ["msg_conv_0"])
+        self.assertTrue(self.store(root)["sessions"][a]["long"])
+        shutil.rmtree(os.path.join(self.home, ".claude", "session_guard_v2", "sessions"))
+        later = self.conversation("v2", 6, 450000)
+        out, b = self.start("v2", root, later, source="resume")
+        self.assertEqual(b, a)
+        out = self.hook("UserPromptSubmit", "v2", later, cwd=root, prompt="go on")
+        self.assertNotIn("decision", out)                         # long mode came back with it: no 400k stop
+        self.assertIn("Mode: LONG", self.ctx(out))
+
+    def test_new_conversation_is_never_linked_to_a_later_copy(self):
+        root = self.migrated("nl")
+        tr = self.conversation("n1", 2, 3000)
+        _, a = self.start("n1", root, tr)
+        _, b = self.start("n2", root, tr, source="fork")          # a fork made later
+        self.assertNotEqual(a, b)
+        out = self.hook("PostToolUse", "n1", tr, cwd=root, tool_name="Bash")
+        self.assertNotIn("SAME CONVERSATION", self.ctx(out))
+        self.assertEqual(json.load(open(os.path.join(self.home, ".claude", "session_guard_v2", "sessions",
+                                                     "n1.json")))["sg_id"], a)
+
     def test_long_mode_hands_off_at_800k_not_700k(self):
         root = self.project()
         self.start("h", root)

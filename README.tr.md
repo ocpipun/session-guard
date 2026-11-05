@@ -112,6 +112,9 @@ Kilitli oturuma mesaj ulaşmaz; kullanıcıya nedeni söylenir. Türleri:
 - **Güvenli paralel yazma:** proje başına bir kilit, kilit içinde taze okuma, sürüm denetimi; görev kaydının elle
   değiştirilmesi reddedilir, STATUS.md'deki görev bölümü elle bozulursa kayıttan yeniden oluşturulur. Her
   oturum yalnız kendisi olarak çalışır: başka bir oturumun kimliğiyle verilen `sg` komutu reddedilir.
+- **Aynı konuşma, yeni kimlik:** Claude Code'un oturum kimliği değişebilir (masaüstü uygulamasının konuşmayı yeni
+  kimliğe kopyaladığı görüldü; bulut makinesi yeniden kurulabilir). Session Guard konuşmayı mesaj kimliklerinden,
+  hem bu bilgisayarda hem projenin kendi kaydında yeniden bulur; SESSION-ID, görevler, uzun mod ve kilitler korunur.
 - **Oturum başı:** yalnız STATUS.md okunur. Claude önce devredilmiş ama henüz alınmamış işi bitirmeyi önerir
   (birden fazlaysa birini önerir, sen seçersin). Bekleyen iş yoksa ve yeni iş istersen: sıradaki görev
   (TASK_BACKLOG.md); sıra boşsa bir fikir (IDEA_TASKS.md), seninle sorularla tasarlanır, sıraya konur, sonra

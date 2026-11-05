@@ -180,6 +180,94 @@ def stop(root, rec, kind, reason):
             pass
 
 
+# --- identity: a conversation found again from its messages (user decision 2026-11-05) ----------------------
+# Claude Code's session_id is not a stable handle: the desktop app was seen copying a conversation to a new id
+# (2026-11-04, 2026-11-05) and running its first hook before the copy was written; a cloud VM can be rebuilt with a
+# fresh home folder. Session Guard therefore finds a conversation by its assistant message ids: in this machine's
+# records (last and first ids) and in the project's store (first ids, Claude Code ids), which travels with the repo.
+STOP_KINDS = ("context", "finish", "break")
+
+
+def adopt_store_session(rec, data, sid, fork=False):
+    srec = data["sessions"][sid]
+    rec["long"] = rec.get("long") or bool(srec.get("long"))
+    if fork:
+        rec["sg_id"], rec["born"] = core.new_session_id(), core.now()
+        return
+    rec["sg_id"] = sid
+    rec["born"] = rec.get("born") or core.to_time(srec.get("started")) or core.now()
+    stopped = (srec.get("stopped") or {}).get("reason") or ""
+    kind = stopped.split(":")[0]
+    if kind in STOP_KINDS and kind not in rec["locks"]:
+        sessions.lock(rec, kind, stopped)
+
+
+def save_identity(root, rec, reading, long_mode=False):
+    """Once: the conversation's first message ids (and long mode) go into the project's store."""
+    first = reading.first_ids or reading.ids
+    need_ids = bool(first) and not rec.get("id_saved")
+    if not (need_ids or long_mode) or not root or not rec.get("sg_id") or not store.is_project(root):
+        return
+    try:
+        store.mutate(root, lambda d: store.note_identity(d, rec["sg_id"], first if need_ids else (), long_mode),
+                     render=False)
+        if need_ids:
+            rec["id_saved"] = True
+    except (store.Refused, core.Busy):
+        pass
+
+
+def relink(root, rec, reading):
+    """A record made without a match (the first hook ran on an unfinished copy) looks again while the transcript
+    shows history older than the record: in this machine's records, then in the project's store. Returns the note
+    for Claude when it found the conversation's earlier session, else None."""
+    if not rec.get("unlinked"):
+        return None
+    if core.now() - rec["unlinked"] > sessions.LINK_WINDOW:
+        rec["unlinked"] = 0
+        return None
+    if reading.oldest is None or reading.oldest >= (rec.get("born") or core.now()) - 120:
+        return None
+    ids, fresh, fork = reading.ids + reading.first_ids, rec["sg_id"], rec.get("source") == "fork"
+    born = rec.get("born") or core.now()
+    old = sessions.find(rec["claude_id"], ids, not_sg=fresh, before=born)
+    data = store.load(root) if root and store.is_project(root) else None
+    target = old.get("sg_id") if old else store.find_by_messages(data, None, ids, not_sg=fresh, before=core.iso(born))
+    if not target or target == fresh:
+        return None
+    rec["unlinked"] = 0
+    if old:
+        rec["long"] = rec["long"] or bool(old.get("long"))
+        rec["notified"] = list(dict.fromkeys((old.get("notified") or []) + [
+            n for n in rec["notified"] if n not in measure.NOTIFY_ONCE]))
+        rec["locks"] = dict(old.get("locks") or {}, **{k: v for k, v in rec["locks"].items() if k == "quota"})
+        if not fork:
+            rec["sg_id"], rec["born"] = target, old.get("born") or rec["born"]
+    elif data:
+        rec["locks"] = {k: v for k, v in rec["locks"].items() if k == "quota"}
+        adopt_store_session(rec, data, target, fork=fork)
+        if fork:
+            rec["sg_id"] = fresh
+    if data:
+        try:
+            store.mutate(root, lambda d: store.link(d, target, fresh) if fork else store.same_conversation(
+                d, fresh, target, rec["claude_id"], core.place()), render=not fork)
+        except (store.Refused, core.Busy):
+            pass
+    if not fork and rec.get("env_file"):
+        try:
+            core.append_text(rec["env_file"], "export SG_SESSION_ID=%s\n" % target)
+        except OSError:
+            pass
+    if fork:
+        return ("[Session Guard 2.0] FORK FOUND: this conversation is a copy of session %s (found from its messages). "
+                "It keeps its own SESSION-ID %s with the same mode (%s); the tasks stay with %s." % (
+                    target, fresh, "LONG" if rec["long"] else "normal", target))
+    return ("[Session Guard 2.0] SAME CONVERSATION: Claude Code gave this conversation a new id; Session Guard found "
+            "it from its messages. Your SESSION-ID is %s again (mode %s, its tasks and notices kept). %s still works "
+            "as an alias of it." % (target, "LONG" if rec["long"] else "normal", fresh))
+
+
 # --- session start ---------------------------------------------------------------------
 def write_env(rec, root):
     p = os.environ.get("CLAUDE_ENV_FILE")
@@ -193,6 +281,8 @@ def write_env(rec, root):
 
 
 def legacy_check(rec, data):
+    if data and rec.get("sg_id") in data.get("sessions", {}):
+        return False  # registered in the project after its migration (a legacy session is never registered)
     if data and data.get("migrated_at") and rec.get("born") is not None and rec["born"] < data["migrated_at"] \
             and rec["sg_id"] not in data.get("migration_sessions", []):
         sessions.lock(rec, "legacy", "conversation began before migration (%s)" % core.iso(data["migrated_at"]))
@@ -319,21 +409,32 @@ def on_session_start(inp):
     if act != "active":
         return emit(inactive(act, "SessionStart"))
     reading = measure.read_transcript(inp.get("transcript_path"))
-    rec, known = sessions.load(cid, reading.ids)
+    rec, known = sessions.load(cid, reading.ids + reading.first_ids)
     forked_from = None
     if known and source == "fork" and rec.get("continues") and rec["continues"] != cid:
         # /fork, /branch, --fork-session: both conversations may go on, so the fork is its own session. It keeps the
         # mode (long mode included), the notices and the locks: it carries the same context.
         forked_from, rec["sg_id"], rec["born"] = rec["sg_id"], core.new_session_id(), core.now()
+    data = store.load(root) if root else None
+    if not known and data:
+        # Another machine (a cloud VM rebuilt) or a lost record: the project's own store finds the session from
+        # the conversation's messages.
+        found = store.find_by_messages(data, cid, reading.ids + reading.first_ids)
+        if found:
+            adopt_store_session(rec, data, found, fork=source == "fork")
+            if source == "fork":
+                forked_from = found
+            known = True
     if not known:
         rec["sg_id"] = core.new_session_id()
         rec["born"] = core.now() if source in ("startup", "clear", "fork") else (reading.first_at or 0)
+        rec["unlinked"], rec["source"] = core.now(), source  # keeps looking for its earlier id (relink)
+    rec["env_file"] = os.environ.get("CLAUDE_ENV_FILE") or rec.get("env_file")
     if source == "compact":
         # Claude Code summarized the conversation: the context is small again, so the one-time notices fire again
         # as it grows. Hand-off steps stay recorded (a hand-off is not written twice).
         rec["notified"] = [n for n in rec["notified"] if n not in measure.NOTIFY_ONCE]
     rec.update(self=ENTRY, root=root, place=core.place())
-    data = store.load(root) if root else None
     if data:
         rec["project_id"] = data["project_id"]
     old = sessions.v1_lock(cid)
@@ -344,7 +445,7 @@ def on_session_start(inp):
     hit = None if PROJECT_MODE else measure.quota_hit()
     if hit:
         quota_lock(rec, hit)
-    sessions.save(rec, reading.ids)
+    sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
     if sessions.closed(rec) or hit:
         text = lock_text(rec) or quota_text(rec["locks"]["quota"])
         return emit(ctx("SessionStart", "[Session Guard 2.0] This session is locked: %s Do no work; every prompt is "
@@ -430,15 +531,16 @@ def on_prompt(inp):
     raw_prompt = inp.get("prompt") or ""
     prompt = measure.normalize(raw_prompt)
     reading = measure.read_transcript(inp.get("transcript_path"))
-    rec, known = sessions.load(cid, reading.ids)
+    rec, known = sessions.load(cid, reading.ids + reading.first_ids)
     if not known or (rec.get("self") and rec["self"] != ENTRY and not PROJECT_MODE):
         if not PROJECT_MODE and act == "active":
             return block(msg("restart_plugin"))
         rec["sg_id"] = rec.get("sg_id") or core.new_session_id()
         rec["born"] = rec.get("born") or core.now()
         rec["self"] = ENTRY
+    relinked = relink(root, rec, reading)
     if act == "setup":
-        sessions.save(rec, reading.ids)
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return emit(inactive(act, "UserPromptSubmit"))
     mig = migrate.load()
     head = []
@@ -449,21 +551,21 @@ def on_prompt(inp):
                         "skill setup \"Migration\" from the first project not verified; do nothing else." % (
                             migrate.summary(), (info or {}).get("reason")))
         else:
-            sessions.save(rec, reading.ids)
+            sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
             return block(msg("migration_paused"))
     data = store.load(root) if root else None
     if closed_now(rec, data):
-        sessions.save(rec, reading.ids)
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return block(lock_text(rec))
     quota = rec["locks"].get("quota")
     if quota and measure.quota_cleared(quota):
         del rec["locks"]["quota"]
         quota = None
     if quota:
-        sessions.save(rec, reading.ids)
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return block(quota_text(quota))
 
-    notes, user = [], []
+    notes, user = ([relinked] if relinked else []), []
     refused = None
     finish = measure.has_command(measure.FINISH, prompt)
     if finish and measure.handed(rec):
@@ -479,6 +581,7 @@ def on_prompt(inp):
             long_skipped = True
         else:
             rec["long"] = True
+            save_identity(root, rec, reading, long_mode=True)
             notes.append("LONG MODE is on for this session (cannot be switched off). Confirm it to the user in one line.")
     long_mode = rec["long"]
     gap = time.time() - reading.last_reply if reading.last_reply else None
@@ -489,10 +592,10 @@ def on_prompt(inp):
     limit = measure.LONG_LIMIT if long_mode else measure.NORMAL_LIMIT
     if reading.context is not None and reading.context >= limit and not finish:
         stop(root, rec, "context", "context %s" % measure.kfmt(reading.context))
-        sessions.save(rec, reading.ids)
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return block(msg("hard_limit", k=measure.kfmt(reading.context)))
     if refused:
-        sessions.save(rec, reading.ids)
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return block(refused)
 
     child = child_session(root, rec, raw_prompt) if data else None
@@ -567,7 +670,7 @@ def on_prompt(inp):
             notes.append(restored)
             user.append(msg("status_restored"))
     notes += budget_notes(cid, reading, rec)
-    sessions.save(rec, reading.ids)
+    sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
     if not notes and not head:
         return 0
     data_out = ctx("UserPromptSubmit", "\n\n".join(head + (["\n".join([line] + notes)] if notes else [])))
@@ -792,17 +895,24 @@ def on_tool(inp):
         measure.take_usage(inp.get("tool_response"))
     cid = inp.get("session_id")
     reading = measure.read_transcript(inp.get("transcript_path"))
-    rec, known = sessions.load(cid, reading.ids)
+    rec, known = sessions.load(cid, reading.ids + reading.first_ids)
     if known and inp.get("tool_name") == measure.USAGE_TOOL and rec.get("break_probe") and not subagent(inp):
         measure.probe_reading(rec)  # before the lock check: a break hand-off turn is measured too
-        sessions.save(rec, reading.ids)
-    if not known or sessions.closed(rec):
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
+    if not known:
+        return 0
+    relinked = relink(root, rec, reading)
+    if relinked:
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
+        return emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": relinked}})
+    save_identity(root, rec, reading)
+    if sessions.closed(rec):
         return 0
     quota = rec["locks"].get("quota")
     if quota:
         if measure.quota_cleared(quota):
             del rec["locks"]["quota"]
-            sessions.save(rec, reading.ids)
+            sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         elif time.time() - quota.get("at", 0) > measure.QUOTA_GRACE:
             text = quota_text(quota, "quota_stopped")
             return emit({"continue": False, "stopReason": text, "systemMessage": text})
@@ -847,7 +957,7 @@ def on_tool(inp):
     turn = "turn24:%s" % reading.prompt_at
     if reading.prompt_at and time.time() - reading.prompt_at > measure.PENDING_MAX and turn not in rec["notified"]:
         rec["notified"].append(turn)
-        sessions.save(rec, reading.ids)
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return emit(ctx("PostToolUse", LONG_TURN, msg("stale")))
     step = measure.step_for(reading.context, rec["long"])
     if step and step[1] not in rec["notified"]:
@@ -858,19 +968,19 @@ def on_tool(inp):
         if step[3]:
             stop(root, rec, "context", "context %s" % measure.kfmt(reading.context))
             data.update({"continue": False, "stopReason": msg(step[1])})
-        sessions.save(rec, reading.ids)
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return emit(data)
     hit = None if PROJECT_MODE else measure.quota_hit()
     if hit:
         quota_lock(rec, hit)
-        sessions.save(rec, reading.ids)
+        sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
         return emit(ctx("PostToolUse", "[Session Guard] " + measure.QUOTA_STOP % (
             dict(measure.WINDOWS)[hit[0]], hit[1]["used_percent"], measure.clock(hit[1]["resets_at"])),
             quota_text(rec["locks"]["quota"], "quota_stop")))
     extra += budget_notes(cid, reading, rec)
     if measure.needs_reading(rec, True):
         extra.append(measure.READ_USAGE)
-    sessions.save(rec, reading.ids)
+    sessions.save(rec, reading.ids, reading.first_ids or reading.ids)
     if extra:
         return emit(ctx("PostToolUse", "\n".join(extra)))
     return 0
@@ -940,7 +1050,7 @@ def watch(inp):
     if activation(core.project_root(inp)) != "active":
         return 0
     reading = measure.read_transcript(inp.get("transcript_path"))
-    rec, known = sessions.load(cid, reading.ids)
+    rec, known = sessions.load(cid, reading.ids + reading.first_ids)
     if not known or rec["locks"] or not (reading.pending or reading.stale or reading.turn_open):
         return 0
     sys.stderr.write(WATCH_WAKE)

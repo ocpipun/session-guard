@@ -3,7 +3,10 @@
 
 Each Claude Code session (its documented session_id) gets one Session Guard SESSION-ID (S-YYYYMMDD-xxxxxx) at
 SessionStart. A reopened conversation keeps its record: the same session_id on --resume (documented), or, when
-the app reopens it under a new id, the shared assistant message ids (v1.4 mechanism, kept).
+the app reopens it under a new id, the shared assistant message ids (v1.4 mechanism, kept): the last ids and the
+conversation's first ids (a copy keeps the whole history). The desktop app was seen (2026-11-04, 2026-11-05) to copy
+a conversation to a new id while the first hook already ran on the unfinished copy: a record made without a match is
+"unlinked" and looks again on every hook for LINK_WINDOW (hooks.relink).
 Lock types (each stored on its own; clearing one never clears another):
     context, finish, break   permanent (v1.4)
     quota                    until the window resets (v1.4)
@@ -20,6 +23,7 @@ from . import core
 
 KEEP_IDS = 10
 MAX_AGE = 30 * 86400
+LINK_WINDOW = 30 * 60
 PERMANENT = ("context", "finish", "break", "handed", "legacy", "home")
 
 
@@ -34,7 +38,8 @@ def path_for(claude_id):
 def blank(claude_id):
     return {"signature": "SESSION-GUARD: 2.0", "claude_id": claude_id, "sg_id": None, "self": None, "root": None, "project_id": None,
             "born": None, "long": False, "locks": {}, "notified": [], "ids": [], "asked_at": 0, "stop_blocks": 0,
-            "break_probe": None, "place": core.place()}
+            "break_probe": None, "place": core.place(), "first_ids": [], "unlinked": 0, "source": None,
+            "env_file": None, "saved_at": 0, "id_saved": False}
 
 
 def fix(rec, claude_id):
@@ -47,24 +52,47 @@ def fix(rec, claude_id):
     return base
 
 
+def find(claude_id, ids, not_sg=None, before=None):
+    """The newest other record that shares message ids with this conversation (its last or its first ids). With
+    before: only a session born earlier (a later one is a copy of this one, never its past)."""
+    known, best = set(ids or ()), None
+    if not known:
+        return None
+    for p in glob.glob(os.path.join(folder(), "*.json")):
+        old = core.read_json(p)
+        if not isinstance(old, dict) or old.get("claude_id") == claude_id or (not_sg and old.get("sg_id") == not_sg):
+            continue
+        if before and (old.get("born") or 0) >= before:
+            continue
+        if known & set((old.get("ids") or []) + (old.get("first_ids") or [])):
+            try:
+                when = old.get("saved_at") or os.path.getmtime(p)
+            except OSError:
+                continue
+            if best is None or when > best[0]:
+                best = (when, old)
+    return best and best[1]
+
+
 def load(claude_id, ids=()):
     rec = core.read_json(path_for(claude_id))
     if isinstance(rec, dict):
         return fix(rec, claude_id), True
-    if ids:
-        known = set(ids)
-        for p in glob.glob(os.path.join(folder(), "*.json")):
-            old = core.read_json(p)
-            if isinstance(old, dict) and known & set(old.get("ids") or []):
-                rec = fix(old, claude_id)
-                rec["continues"] = old.get("claude_id")  # not saved: fix() keeps only known fields
-                return rec, True
+    old = find(claude_id, ids)
+    if old:
+        rec = fix(old, claude_id)
+        rec["unlinked"] = 0
+        rec["continues"] = old.get("claude_id")  # not saved: fix() keeps only known fields
+        return rec, True
     return blank(claude_id), False
 
 
-def save(rec, ids=()):
+def save(rec, ids=(), first=()):
     if ids:
         rec["ids"] = list(ids)[-KEEP_IDS:]
+    if first and not rec.get("first_ids"):
+        rec["first_ids"] = list(first)[:KEEP_IDS]
+    rec["saved_at"] = time.time()
     core.write_json(path_for(rec["claude_id"]), rec)
 
 

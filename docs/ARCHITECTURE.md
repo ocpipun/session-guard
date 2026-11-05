@@ -22,7 +22,14 @@ start per project only after its migration is verified.
 ## 2. Ids
 - PROJECT-ID `PRJ-XXXXXXXX` (random), in the store, committed with the repository, so every place sees one id.
 - SESSION-ID `S-YYYYMMDD-xxxxxx` per Claude session (documented `session_id`); kept on resume; a reopened
-  conversation under a new id is found through its message ids (v1.4). Parent/child: a session that claims a
+  conversation under a new id is found through its message ids (v1.4). Identity from messages (user decision
+  2026-11-05; seen twice: the desktop app copied a conversation to a new id and the first hook ran on the unfinished
+  copy, so v1.4 made a fresh normal-mode record and stopped a long-mode session at 400k): the machine record keeps
+  the last and the conversation's first assistant message ids; a record made without a match stays "unlinked" for
+  30 minutes and looks again on every prompt and tool call once the transcript shows older history, matching only a
+  session born earlier (a later one is a copy, handled as a fork). The project store keeps each session's first
+  message ids and long mode, so a session is found again on another machine (cloud VM rebuilt, ~/.claude lost);
+  the id made meanwhile becomes an alias (`renamed_to`). Parent/child: a session that claims a
   hand-off becomes the child of its source; other sessions stay independent (no forced chains).
 - TASK-ID `TASK-001`, `TASK-001-1`, `TASK-001-2-1`. Counters only grow; ids are never reused. Old 1.x session
   ids are listed in `legacy_sessions` only.

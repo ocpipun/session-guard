@@ -339,6 +339,49 @@ def mark_stopped(data, sid, reason):
         rec["stopped"] = {"reason": reason, "at": core.iso()}
 
 
+def note_identity(data, sid, first_ids=(), long_mode=False):
+    """What finds a session again from its messages on another machine (a cloud VM rebuilt, a new ~/.claude): the
+    conversation's first assistant message ids, and long mode. Written once each; returns whether it changed."""
+    rec = data["sessions"].get(sid)
+    if not rec:
+        return False
+    changed = False
+    if first_ids and not rec.get("first_ids"):
+        rec["first_ids"] = list(first_ids)[:10]
+        changed = True
+    if long_mode and not rec.get("long"):
+        rec["long"] = True
+        changed = True
+    return changed
+
+
+def find_by_messages(data, claude_id, ids, not_sg=None, before=None):
+    """The project's session whose conversation this is: the same Claude Code id, or shared first message ids. The
+    newest such session wins (a chain of copies keeps the first ids)."""
+    known, best = set(ids or ()), None
+    for sid, rec in (data or {}).get("sessions", {}).items():
+        if sid == not_sg or rec.get("renamed_to") or (before and (rec.get("started") or "") >= before):
+            continue
+        if (claude_id and claude_id in (rec.get("claude_ids") or [])) or known & set(rec.get("first_ids") or []):
+            key = (bool(claude_id and claude_id in (rec.get("claude_ids") or [])), rec.get("started") or "")
+            if best is None or key > best[0]:
+                best = (key, sid)
+    return best and best[1]
+
+
+def same_conversation(data, fresh, target, claude_id, place):
+    """A session found again under a new Claude Code id: the id made for it meanwhile becomes an alias of the old
+    one (its $SG_SESSION_ID keeps working), and anything it took is moved over."""
+    register_session(data, target, claude_id, place)
+    me = data["sessions"].get(fresh)
+    if not me or fresh == target:
+        return
+    for t in data["tasks"].values():
+        if t["owner"] == fresh:
+            _transfer(data, t, target, "same conversation under a new Claude Code id")
+    data["sessions"][fresh] = dict(me, state="renamed", renamed_to=target)
+
+
 def lock_session(data, sid, reason):
     rec = data["sessions"].get(sid)
     if rec and rec["state"] != "locked":

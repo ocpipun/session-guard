@@ -110,7 +110,7 @@
    "path": "scripts/sg2/hooks.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "13403a96ec9a0d8e00d9b39087599f3e38ea1bd9804c6819fe17f4faa8a0c1c5",
+   "sha256": "7e75d0e61a5e524115a7dd55fd9a45da3cef554b6d7a6bfa8a8aaa0ec9b30ad9",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -158,7 +158,7 @@
    "path": "scripts/sg2/measure.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "b4e171efbc3aefdcddb74a21ce8b429d3acec5e49154337ff9855213eb942a1f",
+   "sha256": "6f9f1bbed7ac25ca5750c85a35b52fe76e58d21cb5d4035a31aa1644855e24ed",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -251,7 +251,7 @@
    "path": "scripts/sg2/sessions.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "75b2db6d7a59bf6a41d44cfe1c7cb23bb94604c3874956787339f62b2886693b",
+   "sha256": "528dfa862c00454f8304afdc1d0ee0131f5c734cc50dad8b25a5c27dbe30f96e",
    "signed": true,
    "depends": [
     "sg2-core",
@@ -264,7 +264,7 @@
    "path": "scripts/sg2/store.py",
    "type": "python",
    "session_guard": "2.0.0",
-   "sha256": "ad6b80149c6cc4e0c86a7df94eff146b3b044fa280b24fb6829f467739eb22ff",
+   "sha256": "d32fc7ad3be2ab378b4f686eb07fef7baf99fbb2cf075cc7731d25a16b96d901",
    "signed": true,
    "depends": [
     "sg2-core",

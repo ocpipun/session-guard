@@ -92,11 +92,36 @@ def is_prompt(entry, content):
 
 class Reading:
     __slots__ = ("context", "last_reply", "ids", "pending", "stale", "prompt_at", "turn_open", "first_at", "peak",
-                 "output")
+                 "output", "first_ids", "oldest")
 
     def __init__(self):
-        self.context = self.last_reply = self.prompt_at = self.first_at = None
+        self.context = self.last_reply = self.prompt_at = self.first_at = self.oldest = None
         self.ids, self.pending, self.stale, self.turn_open, self.peak, self.output = [], 0, 0, False, 0, 0
+        self.first_ids = []  # the conversation's first assistant message ids: a copy under a new id keeps them
+
+
+HEAD_BYTES = 1024 * 1024
+
+
+def _head_ids(lines):
+    """Assistant message ids and the oldest message time in the first lines of a transcript."""
+    ids, oldest = [], None
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        msg = entry.get("message") if isinstance(entry, dict) else None
+        if not isinstance(msg, dict) or entry.get("isSidechain"):
+            continue
+        t = core.to_time(entry.get("timestamp"))
+        if t and (oldest is None or t < oldest):
+            oldest = t
+        if entry.get("type") == "assistant" and msg.get("id") and msg["id"] not in ids:
+            ids.append(msg["id"])
+            if len(ids) >= 10:
+                break
+    return ids, oldest
 
 
 def read_transcript(path):
@@ -109,8 +134,11 @@ def read_transcript(path):
     size = os.path.getsize(path)
     with open(path, "rb") as fh:
         head = fh.readline().decode("utf-8", errors="replace")
+        fh.seek(0)
+        start = fh.read(min(size, HEAD_BYTES)).decode("utf-8", errors="replace").splitlines()[:-1]             if size > TAIL_BYTES else []
         fh.seek(max(0, size - TAIL_BYTES))
         lines = fh.read().decode("utf-8", errors="replace").splitlines()
+    r.first_ids, r.oldest = _head_ids(start or lines)
     for line in [head] + lines[:50]:
         try:
             t = core.to_time(json.loads(line).get("timestamp"))
@@ -134,6 +162,9 @@ def read_transcript(path):
         if not isinstance(msg, dict) or entry.get("isSidechain"):
             continue
         content = msg.get("content") if isinstance(msg.get("content"), list) else []
+        stamp = core.to_time(entry.get("timestamp"))
+        if stamp and (r.oldest is None or stamp < r.oldest):
+            r.oldest = stamp
         if entry.get("type") == "assistant":
             last_kind = "tool" if any(isinstance(p, dict) and p.get("type") == "tool_use" for p in content) else "text"
             if msg.get("id") and msg.get("id") not in r.ids:

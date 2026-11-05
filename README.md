@@ -108,6 +108,9 @@ A 24-hour watch tells the user when a turn or a background job has been running 
 - **Safe parallel writes:** one lock per project store, a fresh read inside the lock, revision checks; direct edits
   of the store are refused, and a hand-edited task block in STATUS.md is rebuilt from the store. A session acts
   only as itself: an `sg` command with another session's id is refused.
+- **Same conversation, new id:** Claude Code's session id can change (the desktop app was seen copying a
+  conversation to a new id; a cloud VM can be rebuilt). Session Guard finds the conversation again from its message
+  ids, on this machine and in the project's own records, and keeps its SESSION-ID, tasks, long mode and locks.
 - **Session start:** only STATUS.md is read. First Claude proposes finishing work that was handed off and not
   taken over yet (several: it recommends one, you choose). Only when none waits and you want new work: a queued
   task (TASK_BACKLOG.md); queue empty: an idea (IDEA_TASKS.md), designed with you by questions, put in the queue,
